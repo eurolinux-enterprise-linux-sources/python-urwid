@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Urwid Text Layout classes
-#    Copyright (C) 2004-2007  Ian Ward
+#    Copyright (C) 2004-2011  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -19,7 +19,9 @@
 #
 # Urwid web site: http://excess.org/urwid/
 
-from util import *
+from urwid.util import calc_width, calc_text_pos, calc_trim_text, is_wide_char, \
+    move_prev_char, move_next_char
+from urwid.compat import bytes, PYTHON3, B
 
 class TextLayout:
     def supports_align_mode(self, align):
@@ -31,27 +33,30 @@ class TextLayout:
     def layout(self, text, width, align, wrap ):
         """
         Return a layout structure for text.
-        
-        text -- string in current encoding or unicode string
-        width -- number of screen columns available
-        align -- align mode for text
-        wrap -- wrap mode for text
+
+        :param text: string in current encoding or unicode string
+        :param width: number of screen columns available
+        :param align: align mode for text
+        :param wrap: wrap mode for text
 
         Layout structure is a list of line layouts, one per output line.
         Line layouts are lists than may contain the following tuples:
-          ( column width of text segment, start offset, end offset )
-          ( number of space characters to insert, offset or None)
-          ( column width of insert text, offset, "insert text" )
+
+        * (column width of text segment, start offset, end offset)
+        * (number of space characters to insert, offset or None)
+        * (column width of insert text, offset, "insert text")
 
         The offset in the last two tuples is used to determine the
-        attribute used for the inserted spaces or text respectively.  
-        The attribute used will be the same as the attribute at that 
+        attribute used for the inserted spaces or text respectively.
+        The attribute used will be the same as the attribute at that
         text offset.  If the offset is None when inserting spaces
         then no attribute will be used.
         """
-        assert 0, ("This function must be overridden by a real"
+        raise NotImplementedError("This function must be overridden by a real"
             " text layout class. (see StandardTextLayout)")
-        return [[]]
+
+class CanNotDisplayText(Exception):
+    pass
 
 class StandardTextLayout(TextLayout):
     def __init__(self):#, tab_stops=(), tab_stop_every=8):
@@ -60,7 +65,7 @@ class StandardTextLayout(TextLayout):
         #tab_stops -- list of screen column indexes for tab stops
         #tab_stop_every -- repeated interval for following tab stops
         #"""
-        #assert tab_stop_every is None or type(tab_stop_every)==type(0)
+        #assert tab_stop_every is None or type(tab_stop_every)==int
         #if not tab_stops and tab_stop_every:
         #    self.tab_stops = (tab_stop_every,)
         #self.tab_stops = tab_stops
@@ -73,8 +78,11 @@ class StandardTextLayout(TextLayout):
         return wrap in ('any', 'space', 'clip')
     def layout(self, text, width, align, wrap ):
         """Return a layout structure for text."""
-        segs = self.calculate_text_segments( text, width, wrap )
-        return self.align_layout( text, width, segs, wrap, align )
+        try:
+            segs = self.calculate_text_segments( text, width, wrap )
+            return self.align_layout( text, width, segs, wrap, align )
+        except CanNotDisplayText:
+            return [[]]
 
     def pack(self, maxcol, layout):
         """
@@ -83,7 +91,7 @@ class StandardTextLayout(TextLayout):
         returned by self.layout().
         """
         maxwidth = 0
-        assert layout, "huh? empty layout?: "+`layout`
+        assert layout, "huh? empty layout?: "+repr(layout)
         for l in layout:
             lw = line_width(l)
             if lw >= maxcol:
@@ -104,28 +112,33 @@ class StandardTextLayout(TextLayout):
                 out.append([(width-sc, None)] + l)
                 continue
             assert align == 'center'
-            out.append([((width-sc+1)/2, None)] + l)
+            out.append([((width-sc+1) // 2, None)] + l)
         return out
-        
 
-    def calculate_text_segments( self, text, width, wrap ):
+
+    def calculate_text_segments(self, text, width, wrap):
         """
-        Calculate the segments of text to display given width screen 
-        columns to display them.  
-        
-        text - text to display
+        Calculate the segments of text to display given width screen
+        columns to display them.
+
+        text - unicode text or byte string to display
         width - number of available screen columns
         wrap - wrapping mode used
-        
+
         Returns a layout structure without aligmnent applied.
         """
+        nl, nl_o, sp_o = "\n", "\n", " "
+        if PYTHON3 and isinstance(text, bytes):
+            nl = B(nl) # can only find bytes in python3 bytestrings
+            nl_o = ord(nl_o) # + an item of a bytestring is the ordinal value
+            sp_o = ord(sp_o)
         b = []
         p = 0
         if wrap == 'clip':
             # no wrapping to calculate, so it's easy.
             while p<=len(text):
-                n_cr = text.find("\n", p)
-                if n_cr == -1: 
+                n_cr = text.find(nl, p)
+                if n_cr == -1:
                     n_cr = len(text)
                 sc = calc_width(text, p, n_cr)
                 l = [(0,n_cr)]
@@ -135,11 +148,11 @@ class StandardTextLayout(TextLayout):
                 p = n_cr+1
             return b
 
-        
+
         while p<=len(text):
             # look for next eligible line break
-            n_cr = text.find("\n", p)
-            if n_cr == -1: 
+            n_cr = text.find(nl, p)
+            if n_cr == -1:
                 n_cr = len(text)
             sc = calc_width(text, p, n_cr)
             if sc == 0:
@@ -152,17 +165,19 @@ class StandardTextLayout(TextLayout):
                 b.append([(sc,p,n_cr),
                     # removed character hint
                     (0,n_cr)])
-                
+
                 p = n_cr+1
                 continue
             pos, sc = calc_text_pos( text, p, n_cr, width )
-            # FIXME: handle pathological width=1 double-byte case
+            if pos == p: # pathological width=1 double-byte case
+                raise CanNotDisplayText(
+                    "Wide character will not fit in 1-column width")
             if wrap == 'any':
                 b.append([(sc,p,pos)])
                 p = pos
                 continue
             assert wrap == 'space'
-            if text[pos] == " ":
+            if text[pos] == sp_o:
                 # perfect space wrap
                 b.append([(sc,p,pos),
                     # removed character hint
@@ -174,16 +189,16 @@ class StandardTextLayout(TextLayout):
                 b.append([(sc,p,pos)])
                 p = pos
                 continue
-            prev = pos    
+            prev = pos
             while prev > p:
                 prev = move_prev_char(text, p, prev)
-                if text[prev] == " ":
+                if text[prev] == sp_o:
                     sc = calc_width(text,p,prev)
                     l = [(0,prev)]
                     if p!=prev:
                         l = [(sc,p,prev)] + l
                     b.append(l)
-                    p = prev+1 
+                    p = prev+1
                     break
                 if is_wide_char(text,prev):
                     # wrap after wide char
@@ -206,7 +221,7 @@ class StandardTextLayout(TextLayout):
                         [(p_sc, p_off, p_end),
                                (h_sc, h_off)] = b[-1]
                     if (p_sc < width and h_sc==0 and
-                        text[h_off] == " "):
+                        text[h_off] == sp_o):
                         # combine with previous line
                         del b[-1]
                         p = p_off
@@ -216,13 +231,13 @@ class StandardTextLayout(TextLayout):
                         # check for trailing " " or "\n"
                         p = pos
                         if p < len(text) and (
-                            text[p] in (" ","\n")):
+                            text[p] in (sp_o, nl_o)):
                             # removed character hint
                             b[-1].append((0,p))
                             p += 1
                         continue
-                        
-                        
+
+
                 # force any char wrap
                 b.append([(sc,p,pos)])
                 p = pos
@@ -240,29 +255,29 @@ class LayoutSegment:
     def __init__(self, seg):
         """Create object from line layout segment structure"""
         
-        assert type(seg) == type(()), `seg`
-        assert len(seg) in (2,3), `seg`
+        assert type(seg) == tuple, repr(seg)
+        assert len(seg) in (2,3), repr(seg)
         
         self.sc, self.offs = seg[:2]
         
-        assert type(self.sc) == type(0), `self.sc`
+        assert type(self.sc) == int, repr(self.sc)
         
         if len(seg)==3:
-            assert type(self.offs) == type(0), `self.offs`
-            assert self.sc > 0, `seg`
+            assert type(self.offs) == int, repr(self.offs)
+            assert self.sc > 0, repr(seg)
             t = seg[2]
-            if type(t) == type(""):
+            if type(t) == bytes:
                 self.text = t
                 self.end = None
             else:
-                assert type(t) == type(0), `t`
+                assert type(t) == int, repr(t)
                 self.text = None
                 self.end = t
         else:
-            assert len(seg) == 2, `seg`
+            assert len(seg) == 2, repr(seg)
             if self.offs is not None:
-                assert self.sc >= 0, `seg`
-                assert type(self.offs)==type(0)
+                assert self.sc >= 0, repr(seg)
+                assert type(self.offs)==int
             self.text = self.end = None
             
     def subseg(self, text, start, end):
@@ -282,8 +297,8 @@ class LayoutSegment:
             # use text stored in segment (self.text)
             spos, epos, pad_left, pad_right = calc_trim_text(
                 self.text, 0, len(self.text), start, end )
-            return [ (end-start, self.offs, " "*pad_left + 
-                self.text[spos:epos] + " "*pad_right) ]
+            return [ (end-start, self.offs, bytes().ljust(pad_left) +
+                self.text[spos:epos] + bytes().ljust(pad_right)) ]
         elif self.end:
             # use text passed as parameter (text)
             spos, epos, pad_left, pad_right = calc_trim_text(
@@ -321,7 +336,7 @@ def shift_line( segs, amount ):
     segs -- line of a layout structure
     amount -- screen columns to shift right (+ve) or left (-ve)
     """
-    assert type(amount)==type(0), `amount`
+    assert type(amount)==int, repr(amount)
     
     if segs and len(segs[0])==2 and segs[0][1]==None:
         # existing shift
@@ -421,7 +436,7 @@ def calc_line_pos( text, line_layout, pref_col ):
                 break
         current_sc += s.sc
     
-    if closest_pos is None or type(closest_pos) == type(0):
+    if closest_pos is None or type(closest_pos) == int:
         return closest_pos
 
     # return the last positions in the segment "closest_pos"

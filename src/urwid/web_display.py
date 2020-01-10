@@ -27,9 +27,10 @@ import sys
 import signal
 import random
 import select
-import util
 import socket
 import glob
+
+from urwid import util
 _js_code = r"""
 // Urwid web (CGI/Asynchronous Javascript) display module
 //    Copyright (C) 2004-2005  Ian Ward
@@ -683,9 +684,10 @@ class Screen:
         Restore settings and clean up.  
         """
         assert self._started
+        # XXX which exceptions does this actually raise? EnvironmentError?
         try:
             self._close_connection()
-        except:
+        except Exception:
             pass
         signal.signal(signal.SIGTERM,signal.SIG_DFL)
         self._cleanup_pipe()
@@ -704,26 +706,27 @@ class Screen:
             return fn()
         finally:
             self.stop()
-            
+
 
     def _close_connection(self):
         if self.update_method == "polling child":
             self.server_socket.settimeout(0)
-            socket, addr = self.server_socket.accept()
-            socket.sendall("Z")
-            socket.close()
-        
+            sock, addr = self.server_socket.accept()
+            sock.sendall("Z")
+            sock.close()
+
         if self.update_method == "multipart":
             sys.stdout.write("\r\nZ"
                 "\r\n--ZZ--\r\n")
             sys.stdout.flush()
-                
+
     def _cleanup_pipe(self, *args):
         if not self.pipe_name: return
+        # XXX which exceptions does this actually raise? EnvironmentError?
         try:
             os.remove(self.pipe_name+".in")
             os.remove(self.pipe_name+".update")
-        except:
+        except Exception:
             pass
 
     def _set_screen_size(self, cols, rows ):
@@ -749,7 +752,7 @@ class Screen:
             signal.alarm( 0 )
             try:
                 s, addr = self.server_socket.accept()
-            except socket.timeout, e:
+            except socket.timeout:
                 sys.exit(0)
             send = s.sendall
         else:
@@ -856,7 +859,7 @@ class Screen:
             try:
                 s, addr = self.server_socket.accept()
                 s.close()
-            except socket.timeout, e:
+            except socket.timeout:
                 sys.exit(0)
         else:
             # send empty update
@@ -894,7 +897,7 @@ class Screen:
         os.close(self.input_fd)
         self.input_fd = os.open(self.pipe_name+".in", 
             os.O_NONBLOCK | os.O_RDONLY)
-        #sys.stderr.write( `keydata,self.input_tail`+"\n" )
+        #sys.stderr.write( repr((keydata,self.input_tail))+"\n" )
         keys = keydata.split("\n")
         keys[0] = self.input_tail + keys[0]
         self.input_tail = keys[-1]
@@ -998,25 +1001,24 @@ def handle_short_request():
                 sys.stdout.write(data)
                 data = s.recv(BUF_SZ)
             return True
-        except socket.error,e:
+        except socket.error:
             sys.stdout.write("Status: 404 Not Found\r\n\r\n")
             return True
-        
-        
-    
+
     # this is a keyboard input request
     try:
         fd = os.open((os.path.join(_prefs.pipe_dir,
             "urwid"+urwid_id+".in")), os.O_WRONLY)
-    except OSError,e:
+    except OSError:
         sys.stdout.write("Status: 404 Not Found\r\n\r\n")
         return True
-        
+
+    # FIXME: use the correct encoding based on the request
     keydata = sys.stdin.read(MAX_READ)
-    os.write(fd,keydata)
+    os.write(fd,keydata.encode('ascii'))
     os.close(fd)
     sys.stdout.write("Content-type: text/plain\r\n\r\n")
-    
+
     return True
 
 

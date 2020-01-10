@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Urwid curses output wrapper.. the horror..
-#    Copyright (C) 2004-2007  Ian Ward
+#    Copyright (C) 2004-2011  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -23,16 +23,14 @@
 Curses-based UI implementation
 """
 
-from __future__ import nested_scopes
-
 import curses
 import _curses
-import sys
 
-import util
-import escape
+from urwid import escape
 
-from display_common import RealTerminal
+from urwid.display_common import BaseScreen, RealTerminal, AttrSpec, \
+    UNPRINTABLE_TRANS_TABLE
+from urwid.compat import bytes, PYTHON3
 
 KEY_RESIZE = 410 # curses.KEY_RESIZE (sometimes not defined)
 KEY_MOUSE = 409 # curses.KEY_MOUSE
@@ -58,11 +56,7 @@ _curses_colours = {
 }
 
 
-# replace control characters with ?'s
-_trans_table = "?"*32+"".join([chr(x) for x in range(32,256)])
-
-
-class Screen(RealTerminal):
+class Screen(BaseScreen, RealTerminal):
     def __init__(self):
         super(Screen,self).__init__()
         self.curses_pairs = [
@@ -76,84 +70,23 @@ class Screen(RealTerminal):
         self.prev_input_resize = 0
         self.set_input_timeouts()
         self.last_bstate = 0
-        self._started = False
-    
-    started = property(lambda self: self._started)
 
-    def register_palette( self, l ):
-        """Register a list of palette entries.
+        self.register_palette_entry(None, 'default','default')
 
-        l -- list of (name, foreground, background, mono),
-             (name, foreground, background) or
-             (name, same_as_other_name) palette entries.
-
-        calls self.register_palette_entry for each item in l
-        """
-        
-        for item in l:
-            if len(item) in (3,4):
-                self.register_palette_entry( *item )
-                continue
-            assert len(item) == 2, "Invalid register_palette usage"
-            name, like_name = item
-            if not self.palette.has_key(like_name):
-                raise Exception("palette entry '%s' doesn't exist"%like_name)
-            self.palette[name] = self.palette[like_name]
-
-    def register_palette_entry( self, name, foreground, background,
-        mono=None):
-        """Register a single palette entry.
-
-        name -- new entry/attribute name
-        foreground -- foreground colour, one of: 'black', 'dark red',
-            'dark green', 'brown', 'dark blue', 'dark magenta',
-            'dark cyan', 'light gray', 'dark gray', 'light red',
-            'light green', 'yellow', 'light blue', 'light magenta',
-            'light cyan', 'white', 'default' (black if unable to
-            use terminal's default)
-        background -- background colour, one of: 'black', 'dark red',
-            'dark green', 'brown', 'dark blue', 'dark magenta',
-            'dark cyan', 'light gray', 'default' (light gray if
-            unable to use terminal's default)
-        mono -- monochrome terminal attribute, one of: None (default),
-            'bold',    'underline', 'standout', or a tuple containing
-            a combination eg. ('bold','underline')
-            
-        """
-        assert not self._started
-
-        fg_a, fg_b = _curses_colours[foreground]
-        bg_a, bg_b = _curses_colours[background]
-        if bg_b: # can't do bold backgrounds
-            raise Exception("%s is not a supported background colour"%background )
-        assert (mono is None or 
-            mono in (None, 'bold', 'underline', 'standout') or
-            type(mono)==type(()))
-    
-        for i in range(len(self.curses_pairs)):
-            pair = self.curses_pairs[i]
-            if pair == (fg_a, bg_a): break
-        else:
-            i = len(self.curses_pairs)
-            self.curses_pairs.append( (fg_a, bg_a) )
-        
-        self.palette[name] = (i, fg_b, mono)
-        
-    
     def set_mouse_tracking(self):
         """
-        Enable mouse tracking.  
-        
+        Enable mouse tracking.
+
         After calling this function get_input will include mouse
         click events along with keystrokes.
         """
-        rval = curses.mousemask( 0 
+        curses.mousemask(0
             | curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED
             | curses.BUTTON2_PRESSED | curses.BUTTON2_RELEASED
             | curses.BUTTON3_PRESSED | curses.BUTTON3_RELEASED
             | curses.BUTTON4_PRESSED | curses.BUTTON4_RELEASED
             | curses.BUTTON_SHIFT | curses.BUTTON_ALT
-            | curses.BUTTON_CTRL )
+            | curses.BUTTON_CTRL)
 
     def start(self):
         """
@@ -162,7 +95,6 @@ class Screen(RealTerminal):
         assert self._started == False
 
         self.s = curses.initscr()
-        self._started = True
         self.has_color = curses.has_colors()
         if self.has_color:
             curses.start_color()
@@ -184,6 +116,8 @@ class Screen(RealTerminal):
         if not self._signal_keys_set:
             self._old_signal_keys = self.tty_signal_keys()
 
+        super(Screen, self).start()
+
     
     def stop(self):
         """
@@ -198,10 +132,11 @@ class Screen(RealTerminal):
         except _curses.error:
             pass # don't block original error with curses error
         
-        self._started = False
-        
         if self._old_signal_keys:
             self.tty_signal_keys(*self._old_signal_keys)
+
+        super(Screen, self).stop()
+
     
     def run_wrapper(self,fn):
         """Call fn in fullscreen mode.  Return to normal on exit.
@@ -217,48 +152,23 @@ class Screen(RealTerminal):
             self.stop()
 
     def _setup_colour_pairs(self):
-    
-        k = 1
-        if self.has_color:
-            if len(self.curses_pairs) > curses.COLOR_PAIRS:
-                raise Exception("Too many colour pairs!  Use fewer combinations.")
-        
-            for fg,bg in self.curses_pairs[1:]:
-                if not self.has_default_colors and fg == -1:
-                    fg = _curses_colours["black"][0]
-                if not self.has_default_colors and bg == -1:
-                    bg = _curses_colours["light gray"][0]
-                curses.init_pair(k,fg,bg)
-                k+=1
-        else:
-            wh, bl = curses.COLOR_WHITE, curses.COLOR_BLACK
-        
-        self.attrconv = {}
-        for name, (cp, a, mono) in self.palette.items():
-            if self.has_color:
-                self.attrconv[name] = curses.color_pair(cp)
-                if a: self.attrconv[name] |= curses.A_BOLD
-            elif type(mono)==type(()):
-                attr = 0
-                for m in mono:
-                    attr |= self._curses_attr(m)
-                self.attrconv[name] = attr
-            else:
-                attr = self._curses_attr(mono)
-                self.attrconv[name] = attr
-    
-    def _curses_attr(self, a):
-        if a == 'bold':
-            return curses.A_BOLD
-        elif a == 'standout':
-            return curses.A_STANDOUT
-        elif a == 'underline':
-            return curses.A_UNDERLINE
-        else:
-            return 0
-                
-                
+        """
+        Initialize all 63 color pairs based on the term:
+        bg * 8 + 7 - fg
+        So to get a color, we just need to use that term and get the right color
+        pair number.
+        """
+        if not self.has_color:
+            return
 
+        for fg in xrange(8):
+            for bg in xrange(8):
+                # leave out white on black
+                if fg == curses.COLOR_WHITE and \
+                   bg == curses.COLOR_BLACK:
+                    continue
+
+                curses.init_pair(bg * 8 + 7 - fg, fg, bg)
 
     def _curs_set(self,x):
         if self.cursor_state== "fixed" or x == self.cursor_state: 
@@ -324,7 +234,7 @@ class Screen(RealTerminal):
         self.max_tenths = convert_to_tenths(max_wait)
         self.complete_tenths = convert_to_tenths(complete_wait)
         self.resize_tenths = convert_to_tenths(resize_wait)
-    
+
     def get_input(self, raw_keys=False):
         """Return pending input as a list.
 
@@ -338,35 +248,38 @@ class Screen(RealTerminal):
         If raw_keys is False (default) this function will return a list
         of keys pressed.  If raw_keys is True this function will return
         a ( keys pressed, raw keycodes ) tuple instead.
-        
-        Examples of keys returned
-        -------------------------
-        ASCII printable characters:  " ", "a", "0", "A", "-", "/" 
-        ASCII control characters:  "tab", "enter"
-        Escape sequences:  "up", "page up", "home", "insert", "f1"
-        Key combinations:  "shift f1", "meta a", "ctrl b"
-        Window events:  "window resize"
-        
-        When a narrow encoding is not enabled
-        "Extended ASCII" characters:  "\\xa1", "\\xb2", "\\xfe"
 
-        When a wide encoding is enabled
-        Double-byte characters:  "\\xa1\\xea", "\\xb2\\xd4"
+        Examples of keys returned:
 
-        When utf8 encoding is enabled
-        Unicode characters: u"\\u00a5", u'\\u253c"
+        * ASCII printable characters:  " ", "a", "0", "A", "-", "/"
+        * ASCII control characters:  "tab", "enter"
+        * Escape sequences:  "up", "page up", "home", "insert", "f1"
+        * Key combinations:  "shift f1", "meta a", "ctrl b"
+        * Window events:  "window resize"
 
-        Examples of mouse events returned
-        ---------------------------------
-        Mouse button press: ('mouse press', 1, 15, 13), 
+        When a narrow encoding is not enabled:
+
+        * "Extended ASCII" characters:  "\\xa1", "\\xb2", "\\xfe"
+
+        When a wide encoding is enabled:
+
+        * Double-byte characters:  "\\xa1\\xea", "\\xb2\\xd4"
+
+        When utf8 encoding is enabled:
+
+        * Unicode characters: u"\\u00a5", u'\\u253c"
+
+        Examples of mouse events returned:
+
+        * Mouse button press: ('mouse press', 1, 15, 13),
                             ('meta mouse press', 2, 17, 23)
-        Mouse button release: ('mouse release', 0, 18, 13),
+        * Mouse button release: ('mouse release', 0, 18, 13),
                               ('ctrl mouse release', 0, 17, 23)
         """
         assert self._started
-        
+
         keys, raw = self._get_input( self.max_tenths )
-        
+
         # Avoid pegging CPU at 100% when slowly resizing, and work
         # around a bug with some braindead curses implementations that 
         # return "no key" between "window resize" commands 
@@ -519,14 +432,41 @@ class Screen(RealTerminal):
 
     def _setattr(self, a):
         if a is None:
-            self.s.attrset( 0 )
+            self.s.attrset(0)
             return
-        if not self.attrconv.has_key(a):
-            raise Exception, "Attribute %s not registered!"%`a`
-        self.s.attrset( self.attrconv[a] )
-                
-            
-            
+        elif not isinstance(a, AttrSpec):
+            p = self._palette.get(a, (AttrSpec('default', 'default'),))
+            a = p[0]
+
+        if self.has_color:
+            if a.foreground_basic:
+                if a.foreground_number >= 8:
+                    fg = a.foreground_number - 8
+                else:
+                    fg = a.foreground_number
+            else:
+                fg = 7
+
+            if a.background_basic:
+                bg = a.background_number
+            else:
+                bg = 0
+
+            attr = curses.color_pair(bg * 8 + 7 - fg)
+        else:
+            attr = 0
+
+        if a.bold:
+            attr |= curses.A_BOLD
+        if a.standout:
+            attr |= curses.A_STANDOUT
+        if a.underline:
+            attr |= curses.A_UNDERLINE
+        if a.blink:
+            attr |= curses.A_BLINK
+
+        self.s.attrset(attr)
+
     def draw_screen(self, (cols, rows), r ):
         """Paint screen with rendered canvas."""
         assert self._started
@@ -547,18 +487,25 @@ class Screen(RealTerminal):
             lasta = None
             nr = 0
             for a, cs, seg in row:
-                seg = seg.translate( _trans_table )
+                if cs != 'U':
+                    seg = seg.translate(UNPRINTABLE_TRANS_TABLE)
+                    assert isinstance(seg, bytes)
+
                 if first or lasta != a:
                     self._setattr(a)
                     lasta = a
                 try:
-                    if cs == "0":
+                    if cs in ("0", "U"):
                         for i in range(len(seg)):
                             self.s.addch( 0x400000 +
                                 ord(seg[i]) )
                     else:
                         assert cs is None
-                        self.s.addstr( seg )
+                        if PYTHON3:
+                            assert isinstance(seg, bytes)
+                            self.s.addstr(seg.decode('utf-8'))
+                        else:
+                            self.s.addstr(seg)
                 except _curses.error:
                     # it's ok to get out of the
                     # screen on the lower right
@@ -610,7 +557,7 @@ class _test:
     def run(self):
         class FakeRender: pass
         r = FakeRender()
-        text = ["  has_color = "+`self.ui.has_color`,""]
+        text = ["  has_color = "+repr(self.ui.has_color),""]
         attr = [[],[]]
         r.coords = {}
         r.cursor = None
@@ -641,12 +588,12 @@ class _test:
             t = ""
             a = []
             for k in keys:
-                if type(k) == type(u""): k = k.encode("utf-8")
+                if type(k) == unicode: k = k.encode("utf-8")
                 t += "'"+k + "' "
                 a += [(None,1), ('yellow on dark blue',len(k)),
                     (None,2)]
             
-            text.append(t + ": "+ `raw`)
+            text.append(t + ": "+ repr(raw))
             attr.append(a)
             text = text[-rows:]
             attr = attr[-rows:]

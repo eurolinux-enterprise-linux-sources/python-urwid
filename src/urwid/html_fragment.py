@@ -23,9 +23,9 @@
 HTML PRE-based UI implementation
 """
 
-import util
-from main_loop import ExitMainLoop
-from display_common import AttrSpec, BaseScreen
+from urwid import util
+from urwid.main_loop import ExitMainLoop
+from urwid.display_common import AttrSpec, BaseScreen
 
 
 # replace control characters with ?'s
@@ -60,7 +60,7 @@ class HtmlGenerator(BaseScreen):
         if bright_is_bold is None:
             bright_is_bold = self.bright_is_bold
         if has_underline is None:
-            has_unerline = self.has_underline
+            has_underline = self.has_underline
 
         self.colors = colors
         self.bright_is_bold = bright_is_bold
@@ -224,17 +224,17 @@ def screenshot_init( sizes, keys ):
     """
     try:
         for (row,col) in sizes:
-            assert type(row) == type(0)
+            assert type(row) == int
             assert row>0 and col>0
-    except:
+    except (AssertionError, ValueError):
         raise Exception, "sizes must be in the form [ (col1,row1), (col2,row2), ...]"
     
     try:
         for l in keys:
-            assert type(l) == type([])
+            assert type(l) == list
             for k in l:
-                assert type(k) == type("")
-    except:
+                assert type(k) == str
+    except (AssertionError, ValueError):
         raise Exception, "keys must be in the form [ [keyA1, keyA2, ..], [keyB1, ..], ...]"
     
     import curses_display

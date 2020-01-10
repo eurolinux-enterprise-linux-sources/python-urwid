@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Urwid canvas class and functions
-#    Copyright (C) 2004-2007  Ian Ward
+#    Copyright (C) 2004-2011  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -19,14 +19,13 @@
 #
 # Urwid web site: http://excess.org/urwid/
 
-from __future__ import generators
 import weakref
 
-from util import *
-from escape import * 
-from text_layout import *
+from urwid.util import rle_len, rle_append_modify, rle_join_modify, rle_product, \
+    calc_width, calc_text_pos, apply_target_encoding, trim_text_attr_cs
+from urwid.text_layout import trim_line, LayoutSegment
+from urwid.compat import bytes
 
-import sys
 
 class CanvasCache(object):
     """
@@ -58,6 +57,9 @@ class CanvasCache(object):
         wcls -- widget class that contains render() function
         canvas -- rendered canvas with widget_info (widget, size, focus)
         """
+        if not canvas.cacheable:
+            return
+
         assert canvas.widget_info, "Can't store canvas without widget_info"
         widget, size, focus = canvas.widget_info
         def walk_depends(canv):
@@ -178,6 +180,8 @@ class Canvas(object):
     """
     base class for canvases
     """
+    cacheable = True
+
     _finalized_error = CanvasError("This canvas has been finalized. "
         "Use CompositeCanvas to wrap this canvas if "
         "you need to make changes.")
@@ -195,7 +199,7 @@ class Canvas(object):
             the old Canvas class is now called TextCanvas.
         """
         if value1 is not None: 
-            raise _renamed_error
+            raise self._renamed_error
         self._widget_info = None
         self.coords = {}
         self.shortcuts = {}
@@ -228,7 +232,7 @@ class Canvas(object):
         Return the text content of the canvas as a list of strings,
         one for each row.
         """
-        return ["".join([text for (attr, cs, text) in row])
+        return [bytes().join([text for (attr, cs, text) in row])
             for row in self.content()]
 
     text = property(_text_content, _raise_old_repr_error)
@@ -254,7 +258,7 @@ class Canvas(object):
             return
         return c[:2] # trim off data part
     def set_cursor(self, c):
-        if self.widget_info:
+        if self.widget_info and self.cacheable:
             raise self._finalized_error
         if c is None:
             try:
@@ -264,6 +268,35 @@ class Canvas(object):
             return
         self.coords["cursor"] = c + (None,) # data part
     cursor = property(get_cursor, set_cursor)
+
+    def get_pop_up(self):
+        c = self.coords.get("pop up", None)
+        if not c:
+            return
+        return c
+    def set_pop_up(self, w, left, top, overlay_width, overlay_height):
+        """
+        This method adds pop-up information to the canvas.  This information
+        is intercepted by a PopUpTarget widget higher in the chain to
+        display a pop-up at the given (left, top) position relative to the
+        current canvas.
+
+        :param w: widget to use for the pop-up
+        :type w: widget
+        :param left: x position for left edge of pop-up >= 0
+        :type left: int
+        :param top: y position for top edge of pop-up >= 0
+        :type top: int
+        :param overlay_width: width of overlay in screen columns > 0
+        :type overlay_width: int
+        :param overlay_height: height of overlay in screen rows > 0
+        :type overlay_height: int
+        """
+        if self.widget_info and self.cacheable:
+            raise self._finalized_error
+
+        self.coords["pop up"] = (left, top, (
+            w, overlay_width, overlay_height))
 
     def translate_coords(self, dx, dy):
         """
@@ -297,11 +330,11 @@ class TextCanvas(Canvas):
         if check_width:
             widths = []
             for t in text:
-                if type(t) != type(""):
-                    raise CanvasError("Canvas text must be plain strings encoded in the screen's encoding", `text`)
+                if type(t) != bytes:
+                    raise CanvasError("Canvas text must be plain strings encoded in the screen's encoding", repr(text))
                 widths.append( calc_width( t, 0, len(t)) )
         else:
-            assert type(maxcol) == type(0)
+            assert type(maxcol) == int
             widths = [maxcol] * len(text)
 
         if maxcol is None:
@@ -315,23 +348,23 @@ class TextCanvas(Canvas):
             attr = [[] for x in range(len(text))]
         if cs == None:
             cs = [[] for x in range(len(text))]
-        
+
         # pad text and attr to maxcol
         for i in range(len(text)):
             w = widths[i]
             if w > maxcol: 
-                raise CanvasError("Canvas text is wider than the maxcol specified \n%s\n%s\n%s"%(`maxcol`,`widths`,`text`))
+                raise CanvasError("Canvas text is wider than the maxcol specified \n%r\n%r\n%r"%(maxcol,widths,text))
             if w < maxcol:
-                text[i] = text[i] + " "*(maxcol-w)
+                text[i] = text[i] + bytes().rjust(maxcol-w)
             a_gap = len(text[i]) - rle_len( attr[i] )
             if a_gap < 0:
-                raise CanvasError("Attribute extends beyond text \n%s\n%s" % (`text[i]`,`attr[i]`) )
+                raise CanvasError("Attribute extends beyond text \n%r\n%r" % (text[i],attr[i]) )
             if a_gap:
                 rle_append_modify( attr[i], (None, a_gap))
             
             cs_gap = len(text[i]) - rle_len( cs[i] )
             if cs_gap < 0:
-                raise CanvasError("Character Set extends beyond text \n%s\n%s" % (`text[i]`,`cs[i]`) )
+                raise CanvasError("Character Set extends beyond text \n%r\n%r" % (text[i],cs[i]) )
             if cs_gap:
                 rle_append_modify( cs[i], (None, cs_gap))
             
@@ -343,7 +376,9 @@ class TextCanvas(Canvas):
 
     def rows(self):
         """Return the number of rows in this canvas."""
-        return len(self._text)
+        rows = len(self._text)
+        assert isinstance(rows, int)
+        return rows
 
     def cols(self):
         """Return the screen column width of this canvas."""
@@ -393,7 +428,7 @@ class TextCanvas(Canvas):
                 text, a_row, cs_row = trim_text_attr_cs(
                     text, a_row, cs_row, trim_left, 
                     trim_left + cols)
-            attr_cs = util.rle_product(a_row, cs_row)
+            attr_cs = rle_product(a_row, cs_row)
             i = 0
             row = []
             for (a, cs), run in attr_cs:
@@ -433,7 +468,7 @@ class BlankCanvas(Canvas):
         def_attr = None
         if attr and None in attr:
             def_attr = attr[None]
-        line = [(def_attr, None, " "*cols)]
+        line = [(def_attr, None, bytes().rjust(cols))]
         for i in range(rows):
             yield line
 
@@ -532,12 +567,21 @@ class CompositeCanvas(Canvas):
                 self.shortcuts[shortcut] = "wrap"
 
     def rows(self):
-        return sum([r for r,cv in self.shards])
+        for r,cv in self.shards:
+            try:
+                assert isinstance(r, int)
+            except AssertionError:
+                raise AssertionError(r, cv)
+        rows = sum([r for r,cv in self.shards])
+        assert isinstance(rows, int)
+        return rows
 
     def cols(self):
         if not self.shards:
             return 0
-        return sum([cv[2] for cv in self.shards[0][1]])
+        cols = sum([cv[2] for cv in self.shards[0][1]])
+        assert isinstance(cols, int)
+        return cols
 
         
     def content(self):
@@ -579,7 +623,7 @@ class CompositeCanvas(Canvas):
             for i in range(num_rows):
                 # if whole shard is unchanged, don't keep 
                 # calling shard_body_row
-                if len(row) != 1 or type(row[0]) != type(0):
+                if len(row) != 1 or type(row[0]) != int:
                     row = shard_body_row(sbody)
                 yield row
 
@@ -695,8 +739,8 @@ class CompositeCanvas(Canvas):
         right = self.cols() - left - width
         bottom = self.rows() - top - height
         
-        assert right >= 0, "top canvas of overlay not the size expected!" + `other.cols(),left,right,width`
-        assert bottom >= 0, "top canvas of overlay not the size expected!" + `other.rows(),top,bottom,height`
+        assert right >= 0, "top canvas of overlay not the size expected!" + repr((other.cols(),left,right,width))
+        assert bottom >= 0, "top canvas of overlay not the size expected!" + repr((other.rows(),top,bottom,height))
 
         shards = self.shards
         top_shards = []
@@ -711,12 +755,12 @@ class CompositeCanvas(Canvas):
 
         left_shards = []
         right_shards = []
-        if left:
+        if left > 0:
             left_shards = [shards_trim_sides(side_shards, 0, left)]
-        if right:
-            right_shards = [shards_trim_sides(side_shards, 
-                left + width, right)]
-        
+        if right > 0:
+            right_shards = [shards_trim_sides(side_shards,
+                max(0, left + width), right)]
+
         if not self.rows():
             middle_shards = []
         elif left or right:
@@ -787,7 +831,7 @@ def shard_body_row(sbody):
             row.extend(content_iter.next())
         else:
             # need to skip this unchanged canvas
-            if row and type(row[-1]) == type(0):
+            if row and type(row[-1]) == int:
                 row[-1] = row[-1] + cview[2]
             else:
                 row.append(cview[2])
@@ -953,7 +997,6 @@ def shards_trim_rows(shards, keep_rows):
     """
     assert keep_rows >= 0, keep_rows
 
-    shard_tail = []
     new_shards = []
     done_rows = 0
     for num_rows, cviews in shards:
@@ -979,7 +1022,7 @@ def shards_trim_sides(shards, left, cols):
     """
     Return shards with starting from column left and cols total width.
     """
-    assert left >= 0 and cols > 0
+    assert left >= 0 and cols > 0, (left, cols)
     shard_tail = []
     new_shards = []
     right = left + cols
@@ -1043,7 +1086,7 @@ def shards_join(shard_lists):
 
 def cview_trim_rows(cv, rows):
     return cv[:3] + (rows,) + cv[4:]
-    
+
 def cview_trim_top(cv, trim):
     return (cv[0], trim + cv[1], cv[2], cv[3] - trim) + cv[4:]
 
@@ -1054,15 +1097,19 @@ def cview_trim_cols(cv, cols):
     return cv[:2] + (cols,) + cv[3:]
 
 
-        
+
 
 def CanvasCombine(l):
     """Stack canvases in l vertically and return resulting canvas.
 
-    l -- list of (canvas, position, focus) tuples.  position is a value
-         that widget.set_focus will accept, or None if not allowed.
-         focus is True if this canvas is the one that would be in focus
-         if the whole widget is in focus.
+    :param l: list of (canvas, position, focus) tuples:
+
+              position
+                a value that widget.set_focus will accept or None if not
+                allowed
+              focus
+                True if this canvas is the one that would be in focus
+                if the whole widget is in focus
     """
     clist = [(CompositeCanvas(c),p,f) for c,p,f in l]
 
@@ -1073,7 +1120,7 @@ def CanvasCombine(l):
     focus_index = 0
     n = 0
     for canv, pos, focus in clist:
-        if focus: 
+        if focus:
             focus_index = n
         children.append((0, row, canv, pos))
         shards.extend(canv.shards)
@@ -1082,7 +1129,7 @@ def CanvasCombine(l):
             combined_canvas.shortcuts[shortcut] = pos
         row += canv.rows()
         n += 1
-    
+
     if focus_index:
         children = [children[focus_index]] + children[:focus_index] + \
             children[focus_index+1:]
@@ -1098,7 +1145,7 @@ def CanvasOverlay(top_c, bottom_c, left, top):
     """
     overlayed_canvas = CompositeCanvas(bottom_c)
     overlayed_canvas.overlay(top_c, left, top)
-    overlayed_canvas.children = [(left, top, top_c, None), 
+    overlayed_canvas.children = [(left, top, top_c, None),
         (0, 0, bottom_c, None)]
     overlayed_canvas.shortcuts = {} # disable background shortcuts
     for shortcut in top_c.shortcuts.keys():
@@ -1109,18 +1156,24 @@ def CanvasOverlay(top_c, bottom_c, left, top):
 def CanvasJoin(l):
     """
     Join canvases in l horizontally. Return result.
-    l -- list of (canvas, position, focus, cols) tuples.  position is a 
-         value that widget.set_focus will accept,  or None if not allowed.
-         focus is True if this canvas is the one that would be in focus if
-         the whole widget is in focus.  cols is the number of screen
-         columns that this widget will require, if larger than the actual
-         canvas.cols() value then this widget will be padded on the right.
+
+    :param l: list of (canvas, position, focus, cols) tuples:
+
+              position
+                value that widget.set_focus will accept or None if not allowed
+              focus
+                True if this canvas is the one that would be in focus if
+                the whole widget is in focus
+              cols
+                is the number of screen columns that this widget will require,
+                if larger than the actual canvas.cols() value then this widget
+                will be padded on the right.
     """
-    
+
     l2 = []
     focus_item = 0
     maxrow = 0
-    n = 0 
+    n = 0
     for canv, pos, focus, cols in l:
         rows = canv.rows()
         pad_right = cols - canv.cols()
@@ -1130,7 +1183,7 @@ def CanvasJoin(l):
             maxrow = rows
         l2.append((canv, pos, pad_right, rows))
         n += 1
-    
+
     shard_lists = []
     children = []
     joined_canvas = CompositeCanvas()
@@ -1158,7 +1211,6 @@ def CanvasJoin(l):
 
 
 def apply_text_layout(text, attr, ls, maxcol):
-    utext = type(text)==type(u"")
     t = []
     a = []
     c = []
@@ -1247,17 +1299,17 @@ def apply_text_layout(text, attr, ls, maxcol):
                 rle_join_modify( linec, cs )
             elif s.offs:
                 if s.sc:
-                    line.append(" "*s.sc)
+                    line.append(bytes().rjust(s.sc))
                     attrrange( s.offs, s.offs, s.sc )
             else:
-                line.append(" "*s.sc)
+                line.append(bytes().rjust(s.sc))
                 linea.append((None, s.sc))
                 linec.append((None, s.sc))
-            
-        t.append("".join(line))
+
+        t.append(bytes().join(line))
         a.append(linea)
         c.append(linec)
-        
+
     return TextCanvas(t, a, c, maxcol=maxcol)
 
 

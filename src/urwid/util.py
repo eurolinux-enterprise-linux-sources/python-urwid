@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Urwid utility functions
-#    Copyright (C) 2004-2007  Ian Ward
+#    Copyright (C) 2004-2011  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -20,16 +20,10 @@
 #
 # Urwid web site: http://excess.org/urwid/
 
-from __future__ import nested_scopes
+from urwid import escape
+from urwid.compat import bytes
 
-import escape
-
-import encodings
-
-try:
-    import str_util
-except ImportError:
-    import old_str_util as str_util
+str_util = escape.str_util
 
 # bring str_util functions into our namespace
 calc_text_pos = str_util.calc_text_pos
@@ -40,26 +34,26 @@ move_prev_char = str_util.move_prev_char
 within_double_byte = str_util.within_double_byte
 
 
-try: enumerate
-except: enumerate = lambda x: zip(range(len(x)),x) # old python
-
-
-# Try to determine if using a supported double-byte encoding
-import locale
-try:
+def detect_encoding():
+    # Try to determine if using a supported double-byte encoding
+    import locale
     try:
-        locale.setlocale( locale.LC_ALL, "" )
-    except locale.Error:
-        pass
-    detected_encoding = locale.getlocale()[1]
-    if not detected_encoding:
-        detected_encoding = ""
-except ValueError, e:
-    # with invalid LANG value python will throw ValueError
-    if e.args and e.args[0].startswith("unknown locale"):
-        detected_encoding = ""
-    else:
-        raise
+        try:
+            locale.setlocale(locale.LC_ALL, "")
+        except locale.Error:
+            pass
+        return locale.getlocale()[1] or ""
+    except ValueError, e:
+        # with invalid LANG value python will throw ValueError
+        if e.args and e.args[0].startswith("unknown locale"):
+            return ""
+        else:
+            raise
+
+if 'detected_encoding' not in locals():
+    detected_encoding = detect_encoding()
+else:
+    assert 0, "It worked!"
 
 _target_encoding = None
 _use_dec_special = True
@@ -112,7 +106,7 @@ def apply_target_encoding( s ):
     """
     Return (encoded byte string, character set rle).
     """
-    if _use_dec_special and type(s) == type(u""):
+    if _use_dec_special and type(s) == unicode:
         # first convert drawing characters
         try:
             s = s.translate( escape.DEC_SPECIAL_CHARMAP )
@@ -122,13 +116,19 @@ def apply_target_encoding( s ):
                     escape.ALT_DEC_SPECIAL_CHARS):
                 s = s.replace( c, escape.SO+alt+escape.SI )
     
-    if type(s) == type(u""):
+    if type(s) == unicode:
         s = s.replace( escape.SI+escape.SO, u"" ) # remove redundant shifts
         s = s.encode( _target_encoding )
 
-    sis = s.split( escape.SO )
+    assert isinstance(s, bytes)
+    SO = escape.SO.encode('ascii')
+    SI = escape.SI.encode('ascii')
 
-    sis0 = sis[0].replace( escape.SI, "" )
+    sis = s.split(SO)
+
+    assert isinstance(sis[0], bytes)
+
+    sis0 = sis[0].replace(SI, bytes())
     sout = []
     cout = []
     if sis0:
@@ -139,24 +139,28 @@ def apply_target_encoding( s ):
         return sis0, cout
     
     for sn in sis[1:]:
-        sl = sn.split( escape.SI, 1 ) 
+        assert isinstance(sn, bytes)
+        assert isinstance(SI, bytes)
+        sl = sn.split(SI, 1)
         if len(sl) == 1:
             sin = sl[0]
+            assert isinstance(sin, bytes)
             sout.append(sin)
-            rle_append_modify(cout, (escape.DEC_TAG, len(sin)))
+            rle_append_modify(cout, (escape.DEC_TAG.encode('ascii'), len(sin)))
             continue
         sin, son = sl
-        son = son.replace( escape.SI, "" )
+        son = son.replace(SI, bytes())
         if sin:
             sout.append(sin)
             rle_append_modify(cout, (escape.DEC_TAG, len(sin)))
         if son:
             sout.append(son)
             rle_append_modify(cout, (None, len(son)))
-    
-    return "".join(sout), cout
-    
-    
+
+    outstr = bytes().join(sout)
+    return outstr, cout
+
+
 ######################################################################
 # Try to set the encoding using the one detected by the locale module
 set_encoding( detected_encoding )
@@ -188,7 +192,6 @@ def calc_trim_text( text, start_offs, end_offs, start_col, end_col ):
     pad_left -- 0 for no pad or 1 for one space to be added
     pad_right -- 0 for no pad or 1 for one space to be added
     """
-    l = []
     spos = start_offs
     pad_left = pad_right = 0
     if start_col > 0:
@@ -222,10 +225,11 @@ def trim_text_attr_cs( text, attr, cs, start_col, end_col ):
         al = rle_get_at( attr, epos )
         rle_append_modify( attrtr, (al, 1) )
         rle_append_modify( cstr, (None, 1) )
-    
-    return " "*pad_left + text[spos:epos] + " "*pad_right, attrtr, cstr
-    
-        
+
+    return (bytes().rjust(pad_left) + text[spos:epos] +
+        bytes().rjust(pad_right), attrtr, cstr)
+
+
 def rle_get_at( rle, pos ):
     """
     Return the attribute at offset pos.
@@ -270,7 +274,7 @@ def rle_len( rle ):
     
     run = 0
     for v in rle:
-        assert type(v) == type(()), `rle`
+        assert type(v) == tuple, repr(rle)
         a, r = v
         run += r
     return run
@@ -359,19 +363,20 @@ def rle_factor( rle ):
     return rle1, rle2
 
 
-class TagMarkupException( Exception ): pass
+class TagMarkupException(Exception): pass
 
-def decompose_tagmarkup( tm ):
+def decompose_tagmarkup(tm):
     """Return (text string, attribute list) for tagmarkup passed."""
-    
-    tl, al = _tagmarkup_recurse( tm, None )
-    text = "".join(tl)
-    
+
+    tl, al = _tagmarkup_recurse(tm, None)
+    # join as unicode or bytes based on type of first element
+    text = tl[0][:0].join(tl)
+
     if al and al[-1][0] is None:
         del al[-1]
-        
+
     return text, al
-    
+
 def _tagmarkup_recurse( tm, attr ):
     """Return (text list, attribute list) for tagmarkup passed.
     
@@ -395,20 +400,16 @@ def _tagmarkup_recurse( tm, attr ):
             ral += al
         return rtl, ral
         
-    if type(tm) == type(()):
+    if type(tm) == tuple:
         # tuples mark a new attribute boundary
         if len(tm) != 2: 
-            raise TagMarkupException, "Tuples must be in the form (attribute, tagmarkup): %s" % `tm`
+            raise TagMarkupException, "Tuples must be in the form (attribute, tagmarkup): %r" % (tm,)
 
         attr, element = tm
         return _tagmarkup_recurse( element, attr )
     
-    if type(tm) not in (str, unicode):
-        # last ditch, try converting the object to unicode
-        try:
-            tm = uncode(tm)
-        except:
-            raise TagMarkupException, "Invalid markup element: %r" % tm
+    if not isinstance(tm,(basestring, bytes)):
+        raise TagMarkupException, "Invalid markup element: %r" % tm
     
     # text
     return [tm], [(attr, len(tm))]
@@ -416,7 +417,7 @@ def _tagmarkup_recurse( tm, attr ):
 
 
 def is_mouse_event( ev ):
-    return type(ev) == type(()) and len(ev)==4 and ev[0].find("mouse")>=0
+    return type(ev) == tuple and len(ev)==4 and ev[0].find("mouse")>=0
 
 def is_mouse_press( ev ):
     return ev.find("press")>=0
@@ -451,5 +452,5 @@ def int_scale(val, val_range, out_range):
     num = int(val * (out_range-1) * 2 + (val_range-1))
     dem = ((val_range-1) * 2)
     # if num % dem == 0 then we are exactly half-way and have rounded up.
-    return num / dem
+    return num // dem
 

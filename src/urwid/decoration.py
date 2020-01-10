@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Urwid widget decoration classes
-#    Copyright (C) 2004-2010  Ian Ward
+#    Copyright (C) 2004-2012  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -20,31 +20,36 @@
 # Urwid web site: http://excess.org/urwid/
 
 
-from util import *
-from widget import *
-from split_repr import remove_defaults
+from urwid.util import int_scale
+from urwid.widget import (Widget, WidgetError,
+    BOX, FLOW, LEFT, CENTER, RIGHT, PACK, CLIP, GIVEN, RELATIVE, RELATIVE_100,
+    TOP, MIDDLE, BOTTOM, delegate_to_widget_mixin)
+from urwid.split_repr import remove_defaults
+from urwid.canvas import CompositeCanvas, SolidCanvas
+from urwid.widget import Divider, Edit, Text, SolidFill # doctests
 
 
 class WidgetDecoration(Widget):  # "decorator" was already taken
+    """
+    original_widget -- the widget being decorated
+
+    This is a base class for decoration widgets, widgets
+    that contain one or more widgets and only ever have
+    a single focus.  This type of widget will affect the
+    display or behaviour of the original_widget but it is
+    not part of determining a chain of focus.
+
+    Don't actually do this -- use a WidgetDecoration subclass
+    instead, these are not real widgets:
+
+    >>> WidgetDecoration(Text(u"hi"))
+    <WidgetDecoration flow widget <Text flow widget 'hi'>>
+    """
     def __init__(self, original_widget):
-        """
-        original_widget -- the widget being decorated
-
-        This is a base class for decoration widgets, widgets
-        that contain one or more widgets and only ever have
-        a single focus.  This type of widget will affect the
-        display or behaviour of the original_widget but it is
-        not part of determining a chain of focus.
-
-        Don't actually do this -- use a WidgetDecoration subclass
-        instead, these are not real widgets:
-        >>> WidgetDecoration(Text("hi"))
-        <WidgetDecoration flow widget <Text flow widget 'hi'>>
-        """
         self._original_widget = original_widget
     def _repr_words(self):
         return self.__super._repr_words() + [repr(self._original_widget)]
-    
+
     def _get_original_widget(self):
         return self._original_widget
     def _set_original_widget(self, original_widget):
@@ -70,7 +75,7 @@ class WidgetDecoration(Widget):  # "decorator" was already taken
         while hasattr(w, '_original_widget'):
             w = w._original_widget
         return w
-    
+
     base_widget = property(_get_base_widget)
 
     def selectable(self):
@@ -80,41 +85,59 @@ class WidgetDecoration(Widget):  # "decorator" was already taken
         return self._original_widget.sizing()
 
 
+class WidgetPlaceholder(delegate_to_widget_mixin('_original_widget'),
+        WidgetDecoration):
+    """
+    This is a do-nothing decoration widget that can be used for swapping
+    between widgets without modifying the container of this widget.
+
+    This can be useful for making an interface with a number of distinct
+    pages or for showing and hiding menu or status bars.
+
+    The widget displayed is stored as the self.original_widget property and
+    can be changed by assigning a new widget to it.
+    """
+    pass
+
+
 class AttrMapError(WidgetError):
     pass
 
-class AttrMap(WidgetDecoration):
+class AttrMap(delegate_to_widget_mixin('_original_widget'), WidgetDecoration):
     """
-    AttrMap is a decoration that maps one set of attributes to another for
-    a FlowWidget or BoxWidget
+    AttrMap is a decoration that maps one set of attributes to another.
+    This object will pass all function calls and variable references to the
+    wrapped widget.
     """
-    no_cache = ["rows"]
-
     def __init__(self, w, attr_map, focus_map=None):
         """
-        w -- widget to wrap (stored as self.original_widget)
-        attr_map -- attribute to apply to w, or dictionary of attribute mappings
-        focus_map -- attribute to apply when in focus or dictionary of
-            attribute mappings, if None use attr
-        
-        This object will pass all function calls and variable references
-        to the wrapped widget.
+        :param w: widget to wrap (stored as self.original_widget)
+        :type w: widget
 
-        >>> AttrMap(Divider("!"), 'bright')
-        <AttrMap flow widget <Divider flow widget div_char='!'> attr_map={None: 'bright'}>
+        :param attr_map: attribute to apply to *w*, or dict of old display
+            attribute: new display attribute mappings
+        :type attr_map: display attribute or dict
+
+        :param focus_map: attribute to apply when in focus or dict of
+            old display attribute: new display attribute mappings;
+            if ``None`` use *attr*
+        :type focus_map: display attribute or dict
+
+        >>> AttrMap(Divider(u"!"), 'bright')
+        <AttrMap flow widget <Divider flow widget '!'> attr_map={None: 'bright'}>
         >>> AttrMap(Edit(), 'notfocus', 'focus')
         <AttrMap selectable flow widget <Edit selectable flow widget '' edit_pos=0> attr_map={None: 'notfocus'} focus_map={None: 'focus'}>
         >>> size = (5,)
-        >>> am = AttrMap(Text("hi"), 'greeting', 'fgreet')
-        >>> am.render(size, focus=False).content().next()
-        [('greeting', None, 'hi   ')]
+        >>> am = AttrMap(Text(u"hi"), 'greeting', 'fgreet')
+        >>> am.render(size, focus=False).content().next() # ... = b in Python 3
+        [('greeting', None, ...'hi   ')]
         >>> am.render(size, focus=True).content().next()
-        [('fgreet', None, 'hi   ')]
-        >>> am2 = AttrMap(Text(('word', "hi")), {None:'bg', 'word':'greeting'})
+        [('fgreet', None, ...'hi   ')]
+        >>> am2 = AttrMap(Text(('word', u"hi")), {'word':'greeting', None:'bg'})
         >>> am2
-        <AttrMap flow widget <Text flow widget 'hi'> attr_map={None: 'bg', 'word': 'greeting'}>
+        <AttrMap flow widget <Text flow widget 'hi'> attr_map={'word': 'greeting', None: 'bg'}>
         >>> am2.render(size).content().next()
-        [('greeting', None, 'hi'), ('bg', None, '   ')]
+        [('greeting', None, ...'hi'), ('bg', None, ...'   ')]
         """
         self.__super.__init__(w)
 
@@ -127,14 +150,14 @@ class AttrMap(WidgetDecoration):
             self.set_focus_map({None: focus_map})
         else:
             self.set_focus_map(focus_map)
-    
+
     def _repr_attrs(self):
         # only include the focus_attr when it takes effect (not None)
         d = dict(self.__super._repr_attrs(), attr_map=self._attr_map)
         if self._focus_map is not None:
             d['focus_map'] = self._focus_map
         return d
-    
+
     def get_attr_map(self):
         # make a copy so ours is not accidentally modified
         # FIXME: a dictionary that detects modifications would be better
@@ -146,9 +169,9 @@ class AttrMap(WidgetDecoration):
         Note this function does not accept a single attribute the way the
         constructor does.  You must specify {None: attribute} instead.
 
-        >> w = AttrMap(Text("hi"), None)
-        >> w.set_attr({'a':'b'})
-        >> w
+        >>> w = AttrMap(Text(u"hi"), None)
+        >>> w.set_attr_map({'a':'b'})
+        >>> w
         <AttrMap flow widget <Text flow widget 'hi'> attr_map={'a': 'b'}>
         """
         for from_attr, to_attr in attr_map.items():
@@ -158,7 +181,7 @@ class AttrMap(WidgetDecoration):
         self._attr_map = attr_map
         self._invalidate()
     attr_map = property(get_attr_map, set_attr_map)
-    
+
     def get_focus_map(self):
         # make a copy so ours is not accidentally modified
         # FIXME: a dictionary that detects modifications would be better
@@ -166,21 +189,21 @@ class AttrMap(WidgetDecoration):
             return dict(self._focus_map)
     def set_focus_map(self, focus_map):
         """
-        Set the focus attribute mapping dictionary 
+        Set the focus attribute mapping dictionary
         {from_attr: to_attr, ...}
-        
-        If None this widget will use the attr mapping instead (no change 
+
+        If None this widget will use the attr mapping instead (no change
         when in focus).
-        
+
         Note this function does not accept a single attribute the way the
         constructor does.  You must specify {None: attribute} instead.
 
-        >> w = AttrMap(Text("hi"), {})
-        >> w.set_focus_map({'a':'b'})
-        >> w
+        >>> w = AttrMap(Text(u"hi"), {})
+        >>> w.set_focus_map({'a':'b'})
+        >>> w
         <AttrMap flow widget <Text flow widget 'hi'> attr_map={} focus_map={'a': 'b'}>
-        >> w.set_focus_map(None)
-        >> w
+        >>> w.set_focus_map(None)
+        >>> w
         <AttrMap flow widget <Text flow widget 'hi'> attr_map={}>
         """
         if focus_map is not None:
@@ -191,7 +214,7 @@ class AttrMap(WidgetDecoration):
         self._focus_map = focus_map
         self._invalidate()
     focus_map = property(get_focus_map, set_focus_map)
-        
+
     def render(self, size, focus=False):
         """
         Render wrapped widget and apply attribute. Return canvas.
@@ -203,16 +226,6 @@ class AttrMap(WidgetDecoration):
         canv = CompositeCanvas(canv)
         canv.fill_attr_apply(attr_map)
         return canv
-    
-    # just use our original widget's methods
-    selectable = property(lambda self:self._original_widget.selectable)
-    get_cursor_coords = property(lambda self:self._original_widget.get_cursor_coords)
-    get_pref_col = property(lambda self:self._original_widget.get_pref_col)
-    keypress = property(lambda self:self._original_widget.keypress)
-    move_cursor_to_coords = property(lambda self:self._original_widget.move_cursor_to_coords)
-    rows = property(lambda self:self._original_widget.rows)
-    mouse_event = property(lambda self:self._original_widget.mouse_event)
-    sizing = property(lambda self:self._original_widget.sizing)
 
 
 
@@ -222,25 +235,25 @@ class AttrWrap(AttrMap):
         w -- widget to wrap (stored as self.original_widget)
         attr -- attribute to apply to w
         focus_attr -- attribute to apply when in focus, if None use attr
-        
+
         This widget is a special case of the new AttrMap widget, and it
-        will pass all function calls and variable references to the wrapped 
+        will pass all function calls and variable references to the wrapped
         widget.  This class is maintained for backwards compatibility only,
         new code should use AttrMap instead.
 
-        >>> AttrWrap(Divider("!"), 'bright')
-        <AttrWrap flow widget <Divider flow widget div_char='!'> attr='bright'>
+        >>> AttrWrap(Divider(u"!"), 'bright')
+        <AttrWrap flow widget <Divider flow widget '!'> attr='bright'>
         >>> AttrWrap(Edit(), 'notfocus', 'focus')
         <AttrWrap selectable flow widget <Edit selectable flow widget '' edit_pos=0> attr='notfocus' focus_attr='focus'>
         >>> size = (5,)
-        >>> aw = AttrWrap(Text("hi"), 'greeting', 'fgreet')
+        >>> aw = AttrWrap(Text(u"hi"), 'greeting', 'fgreet')
         >>> aw.render(size, focus=False).content().next()
-        [('greeting', None, 'hi   ')]
+        [('greeting', None, ...'hi   ')]
         >>> aw.render(size, focus=True).content().next()
-        [('fgreet', None, 'hi   ')]
+        [('fgreet', None, ...'hi   ')]
         """
         self.__super.__init__(w, attr, focus_attr)
-    
+
     def _repr_attrs(self):
         # only include the focus_attr when it takes effect (not None)
         d = dict(self.__super._repr_attrs(), attr=self.attr)
@@ -250,12 +263,12 @@ class AttrWrap(AttrMap):
         if self.focus_attr is not None:
             d['focus_attr'] = self.focus_attr
         return d
-    
+
     # backwards compatibility, widget used to be stored as w
     get_w = WidgetDecoration._get_original_widget
     set_w = WidgetDecoration._set_original_widget
     w = property(get_w, set_w)
-    
+
     def get_attr(self):
         return self.attr_map[None]
     def set_attr(self, attr):
@@ -269,7 +282,7 @@ class AttrWrap(AttrMap):
         """
         self.set_attr_map({None: attr})
     attr = property(get_attr, set_attr)
-    
+
     def get_focus_attr(self):
         focus_map = self.focus_map
         if focus_map:
@@ -278,8 +291,8 @@ class AttrWrap(AttrMap):
         """
         Set the attribute to apply to the wapped widget when it is in
         focus
-        
-        If None this widget will use the attr instead (no change when in 
+
+        If None this widget will use the attr instead (no change when in
         focus).
 
         >> w = AttrWrap(Divider("-"), 'old')
@@ -319,24 +332,26 @@ class BoxAdapter(WidgetDecoration):
         """
         Create a flow widget that contains a box widget
 
-        box_widget -- box widget (stored as self.original_widget)
-        height -- number of rows for box widget
+        :param box_widget: box widget to wrap
+        :type box_widget: Widget
+        :param height: number of rows for box widget
+        :type height: int
 
-        >>> BoxAdapter(SolidFill("x"), 5) # 5-rows of x's
+        >>> BoxAdapter(SolidFill(u"x"), 5) # 5-rows of x's
         <BoxAdapter flow widget <SolidFill box widget 'x'> height=5>
         """
         if hasattr(box_widget, 'sizing') and BOX not in box_widget.sizing():
-            raise BoxAdapterError("%r is not a box widget" % 
+            raise BoxAdapterError("%r is not a box widget" %
                 box_widget)
         WidgetDecoration.__init__(self,box_widget)
-        
+
         self.height = height
-    
+
     def _repr_attrs(self):
         return dict(self.__super._repr_attrs(), height=self.height)
 
     # originally stored as box_widget, keep for compatibility
-    box_widget = property(WidgetDecoration._get_original_widget, 
+    box_widget = property(WidgetDecoration._get_original_widget,
         WidgetDecoration._set_original_widget)
 
     def sizing(self):
@@ -345,8 +360,8 @@ class BoxAdapter(WidgetDecoration):
     def rows(self, size, focus=False):
         """
         Return the predetermined height (behave like a flow widget)
-        
-        >>> BoxAdapter(SolidFill("x"), 5).rows((20,))
+
+        >>> BoxAdapter(SolidFill(u"x"), 5).rows((20,))
         5
         """
         return self.height
@@ -358,37 +373,37 @@ class BoxAdapter(WidgetDecoration):
         if not hasattr(self._original_widget,'get_cursor_coords'):
             return None
         return self._original_widget.get_cursor_coords((maxcol, self.height))
-    
+
     def get_pref_col(self, size):
         (maxcol,) = size
         if not hasattr(self._original_widget,'get_pref_col'):
             return None
         return self._original_widget.get_pref_col((maxcol, self.height))
-    
+
     def keypress(self, size, key):
         (maxcol,) = size
         return self._original_widget.keypress((maxcol, self.height), key)
-    
+
     def move_cursor_to_coords(self, size, col, row):
         (maxcol,) = size
         if not hasattr(self._original_widget,'move_cursor_to_coords'):
             return True
         return self._original_widget.move_cursor_to_coords((maxcol,
             self.height), col, row )
-    
+
     def mouse_event(self, size, event, button, col, row, focus):
         (maxcol,) = size
         if not hasattr(self._original_widget,'mouse_event'):
             return False
         return self._original_widget.mouse_event((maxcol, self.height),
             event, button, col, row, focus)
-    
+
     def render(self, size, focus=False):
         (maxcol,) = size
         canv = self._original_widget.render((maxcol, self.height), focus)
         canv = CompositeCanvas(canv)
         return canv
-    
+
     def __getattr__(self, name):
         """
         Pass calls to box widget.
@@ -401,54 +416,75 @@ class PaddingError(Exception):
     pass
 
 class Padding(WidgetDecoration):
-    def __init__(self, w, align=LEFT, width=PACK, min_width=None, 
-        left=0, right=0):
-        r"""
-        w -- a box, flow or fixed widget to pad on the left and/or right
+    def __init__(self, w, align=LEFT, width=RELATIVE_100, min_width=None,
+            left=0, right=0):
+        """
+        :param w: a box, flow or fixed widget to pad on the left and/or right
             this widget is stored as self.original_widget
-        align -- one of:
-            'left', 'center', 'right'
-            ('relative', percentage 0=left 100=right)
-        width -- one of:
-            fixed number of columns for self.original_widget 
-            'pack'   try to pack self.original_widget to its ideal size
-            ('relative', percentage of total width)
-            'clip'   to enable clipping mode for a fixed widget
-        min_width -- the minimum number of columns for 
-            self.original_widget or None
-        left -- a fixed number of columns to pad on the left
-        right -- a fixed number of columns to pad on thr right
-            
-        Clipping Mode: (width='clip')
+        :type w: Widget
+
+        :param align: one of: ``'left'``, ``'center'``, ``'right'``
+            (``'relative'``, *percentage* 0=left 100=right)
+
+        :param width: one of:
+
+            *given width*
+              integer number of columns for self.original_widget
+
+            ``'pack'``
+              try to pack self.original_widget to its ideal size
+
+            (``'relative'``, *percentage of total width*)
+              make width depend on the container's width
+
+            ``'clip'``
+              to enable clipping mode for a fixed widget
+
+        :param min_width: the minimum number of columns for
+            self.original_widget or ``None``
+        :type min_width: int
+
+        :param left: a fixed number of columns to pad on the left
+        :type left: int
+
+        :param right: a fixed number of columns to pad on thr right
+        :type right: int
+
+        Clipping Mode: (width= ``'clip'``)
         In clipping mode this padding widget will behave as a flow
-        widget and self.original_widget will be treated as a fixed 
+        widget and self.original_widget will be treated as a fixed
         widget.  self.original_widget will will be clipped to fit
-        the available number of columns.  For example if align is 
-        'left' then self.original_widget may be clipped on the right.
+        the available number of columns.  For example if align is
+        ``'left'`` then self.original_widget may be clipped on the right.
 
         >>> size = (7,)
-        >>> Padding(Text("Head"), ('relative', 20)).render(size).text
-        [' Head  ']
-        >>> Padding(Divider("-"), left=2, right=1).render(size).text
-        ['  ---- ']
-        >>> Padding(Divider("*"), 'center', 3).render(size).text
-        ['  ***  ']
-        >>> p=Padding(Text("1234"), 'left', 2, None, 1, 1)
+        >>> def pr(w):
+        ...     for t in w.render(size).text:
+        ...         print "|%s|" % (t.decode('ascii'),)
+        >>> pr(Padding(Text(u"Head"), ('relative', 20), 'pack'))
+        | Head  |
+        >>> pr(Padding(Divider(u"-"), left=2, right=1))
+        |  ---- |
+        >>> pr(Padding(Divider(u"*"), 'center', 3))
+        |  ***  |
+        >>> p=Padding(Text(u"1234"), 'left', 2, None, 1, 1)
         >>> p
         <Padding flow widget <Text flow widget '1234'> left=1 right=1 width=2>
-        >>> p.render(size).text   # align against left
-        [' 12    ', ' 34    ']
+        >>> pr(p)   # align against left
+        | 12    |
+        | 34    |
         >>> p.align = 'right'
-        >>> p.render(size).text   # align against right
-        ['    12 ', '    34 ']
-        >>> Padding(Text("hi\nthere"), 'right').render(size).text
-        ['  hi   ', '  there']
-
+        >>> pr(p)   # align against right
+        |    12 |
+        |    34 |
+        >>> pr(Padding(Text(u"hi\\nthere"), 'right', 'pack')) # pack text first
+        |  hi   |
+        |  there|
         """
         self.__super.__init__(w)
 
         # convert obsolete parameters 'fixed left' and 'fixed right':
-        if type(align) == type(()) and align[0] in ('fixed left', 
+        if type(align) == tuple and align[0] in ('fixed left',
             'fixed right'):
             if align[0]=='fixed left':
                 left = align[1]
@@ -456,7 +492,7 @@ class Padding(WidgetDecoration):
             else:
                 right = align[1]
                 align = RIGHT
-        if type(width) == type(()) and width[0] in ('fixed left', 
+        if type(width) == tuple and width[0] in ('fixed left',
             'fixed right'):
             if width[0]=='fixed left':
                 left = width[1]
@@ -475,7 +511,7 @@ class Padding(WidgetDecoration):
         self._width_type, self._width_amount = normalize_width(width,
             PaddingError)
         self.min_width = min_width
-    
+
     def sizing(self):
         if self._width_type == CLIP:
             return set([FLOW])
@@ -489,7 +525,7 @@ class Padding(WidgetDecoration):
             right=self.right,
             min_width=self.min_width)
         return remove_defaults(attrs, Padding.__init__)
-    
+
     def _get_align(self):
         """
         Return the padding alignment setting.
@@ -515,10 +551,10 @@ class Padding(WidgetDecoration):
         self._width_type, self._width_amount = normalize_width(width,
             PaddingError)
     width = property(_get_width, _set_width)
-        
-    def render(self, size, focus=False):    
+
+    def render(self, size, focus=False):
         left, right = self.padding_values(size, focus)
-        
+
         maxcol = size[0]
         maxcol -= left+right
 
@@ -540,45 +576,46 @@ class Padding(WidgetDecoration):
 
     def padding_values(self, size, focus):
         """Return the number of columns to pad on the left and right.
-        
+
         Override this method to define custom padding behaviour."""
         maxcol = size[0]
         if self._width_type == CLIP:
-            width, ignore = self._original_widget.pack(focus=focus)
+            width, ignore = self._original_widget.pack((), focus=focus)
             return calculate_left_right_padding(maxcol,
-                self._align_type, self._align_amount, 
+                self._align_type, self._align_amount,
                 CLIP, width, None, self.left, self.right)
         if self._width_type == PACK:
-            maxwidth = max(maxcol - self.left - self.right, 
+            maxwidth = max(maxcol - self.left - self.right,
                 self.min_width or 0)
             (width, ignore) = self._original_widget.pack((maxwidth,),
                 focus=focus)
             return calculate_left_right_padding(maxcol,
-                self._align_type, self._align_amount, 
-                GIVEN, width, self.min_width, 
-                self.left, self.right) 
-        return calculate_left_right_padding(maxcol, 
+                self._align_type, self._align_amount,
+                GIVEN, width, self.min_width,
+                self.left, self.right)
+        return calculate_left_right_padding(maxcol,
             self._align_type, self._align_amount,
             self._width_type, self._width_amount,
             self.min_width, self.left, self.right)
 
     def rows(self, size, focus=False):
         """Return the rows needed for self.original_widget."""
+        (maxcol,) = size
+        left, right = self.padding_values(size, focus)
         if self._width_type == PACK:
-            pcols, prows = self._original_widget.pack(size, focus)
+            pcols, prows = self._original_widget.pack((maxcol-left-right,),
+                focus)
             return prows
         if self._width_type == CLIP:
             fcols, frows = self._original_widget.pack((), focus)
             return frows
-        (maxcol,) = size
-        left, right = self.padding_values(size, focus)
         return self._original_widget.rows((maxcol-left-right,), focus=focus)
-    
+
     def keypress(self, size, key):
         """Pass keypress to self._original_widget."""
         maxcol = size[0]
         left, right = self.padding_values(size, True)
-        maxvals = (maxcol-left-right,)+size[1:] 
+        maxvals = (maxcol-left-right,)+size[1:]
         return self._original_widget.keypress(maxvals, key)
 
     def get_cursor_coords(self,size):
@@ -587,9 +624,11 @@ class Padding(WidgetDecoration):
             return None
         left, right = self.padding_values(size, True)
         maxcol = size[0]
-        maxvals = (maxcol-left-right,)+size[1:] 
+        maxvals = (maxcol-left-right,)+size[1:]
+        if maxvals[0] == 0:
+            return None
         coords = self._original_widget.get_cursor_coords(maxvals)
-        if coords is None: 
+        if coords is None:
             return None
         x, y = coords
         return x+left, y
@@ -603,27 +642,27 @@ class Padding(WidgetDecoration):
             return True
         left, right = self.padding_values(size, True)
         maxcol = size[0]
-        maxvals = (maxcol-left-right,)+size[1:] 
-        if type(x)==type(0):
-            if x < left: 
+        maxvals = (maxcol-left-right,)+size[1:]
+        if type(x)==int:
+            if x < left:
                 x = left
-            elif x >= maxcol-right: 
+            elif x >= maxcol-right:
                 x = maxcol-right-1
             x -= left
         return self._original_widget.move_cursor_to_coords(maxvals, x, y)
-    
+
     def mouse_event(self, size, event, button, x, y, focus):
         """Send mouse event if position is within self._original_widget."""
         if not hasattr(self._original_widget,'mouse_event'):
             return False
         left, right = self.padding_values(size, focus)
         maxcol = size[0]
-        if x < left or x >= maxcol-right: 
+        if x < left or x >= maxcol-right:
             return False
-        maxvals = (maxcol-left-right,)+size[1:] 
+        maxvals = (maxcol-left-right,)+size[1:]
         return self._original_widget.mouse_event(maxvals, event, button, x-left, y,
             focus)
-        
+
 
     def get_pref_col(self, size):
         """Return the preferred column from self._original_widget, or None."""
@@ -631,94 +670,152 @@ class Padding(WidgetDecoration):
             return None
         left, right = self.padding_values(size, True)
         maxcol = size[0]
-        maxvals = (maxcol-left-right,)+size[1:] 
+        maxvals = (maxcol-left-right,)+size[1:]
         x = self._original_widget.get_pref_col(maxvals)
-        if type(x) == type(0):
+        if type(x) == int:
             return x+left
         return x
-        
+
 
 class FillerError(Exception):
     pass
 
 class Filler(WidgetDecoration):
-
-    def __init__(self, body, valign="middle", height=None, min_height=None):
+    def __init__(self, body, valign=MIDDLE, height=PACK, min_height=None,
+            top=0, bottom=0):
         """
-        body -- a flow widget or box widget to be filled around (stored 
+        :param body: a flow widget or box widget to be filled around (stored
             as self.original_widget)
-        valign -- one of:
-            'top', 'middle', 'bottom'
-            ('fixed top', rows)
-            ('fixed bottom', rows)
-            ('relative', percentage 0=top 100=bottom)
-        height -- one of:
-            None if body is a flow widget
-            number of rows high 
-            ('fixed bottom', rows)  Only if valign is 'fixed top'
-            ('fixed top', rows)  Only if valign is 'fixed bottom'
-            ('relative', percentage of total height)
-        min_height -- one of:
-            None if no minimum or if body is a flow widget
-            minimum number of rows for the widget when height not fixed
-        
-        If body is a flow widget then height and min_height must be set
-        to None.
-        
+        :type body: Widget
+
+        :param valign: one of:
+            ``'top'``, ``'middle'``, ``'bottom'``,
+            (``'relative'``, *percentage* 0=top 100=bottom)
+
+        :param height: one of:
+
+            ``'pack'``
+              if body is a flow widget
+
+            *given height*
+              integer number of rows for self.original_widget
+
+            (``'relative'``, *percentage of total height*)
+              make height depend on container's height
+
+        :param min_height: one of:
+
+            ``None``
+              if no minimum or if body is a flow widget
+
+            *minimum height*
+              integer number of rows for the widget when height not fixed
+
+        :param top: a fixed number of rows to fill at the top
+        :type top: int
+        :param bottom: a fixed number of rows to fill at the bottom
+        :type bottom: int
+
+        If body is a flow widget then height must be ``'flow'`` and
+        *min_height* will be ignored.
+
         Filler widgets will try to satisfy height argument first by
-        reducing the valign amount when necessary.  If height still 
+        reducing the valign amount when necessary.  If height still
         cannot be satisfied it will also be reduced.
         """
         self.__super.__init__(body)
-        vt,va,ht,ha=decompose_valign_height(valign,height,FillerError)
-        
-        self.valign_type, self.valign_amount = vt, va
-        self.height_type, self.height_amount = ht, ha
-        if self.height_type not in ('fixed', None):
+
+        # convert old parameters to the new top/bottom values
+        if isinstance(height, tuple):
+            if height[0] == 'fixed top':
+                if not isinstance(valign, tuple) or valign[0] != 'fixed bottom':
+                    raise FillerError("fixed bottom height may only be used "
+                        "with fixed top valign")
+                top = height[1]
+                height = RELATIVE_100
+            elif height[0] == 'fixed bottom':
+                if not isinstance(valign, tuple) or valign[0] != 'fixed top':
+                    raise FillerError("fixed top height may only be used "
+                        "with fixed bottom valign")
+                bottom = height[1]
+                height = RELATIVE_100
+        if isinstance(valign, tuple):
+            if valign[0] == 'fixed top':
+                top = valign[1]
+                valign = TOP
+            elif valign[0] == 'fixed bottom':
+                bottom = valign[1]
+                valign = BOTTOM
+
+        # convert old flow mode parameter height=None to height='flow'
+        if height is None or height == FLOW:
+            height = PACK
+
+        self.top = top
+        self.bottom = bottom
+        self.valign_type, self.valign_amount = normalize_valign(valign,
+            FillerError)
+        self.height_type, self.height_amount = normalize_height(height,
+            FillerError)
+
+        if self.height_type not in (GIVEN, PACK):
             self.min_height = min_height
         else:
             self.min_height = None
-    
+
     def sizing(self):
         return set([BOX]) # always a box widget
+
+    def _repr_attrs(self):
+        attrs = dict(self.__super._repr_attrs(),
+            valign=simplify_valign(self.valign_type, self.valign_amount),
+            height=simplify_height(self.height_type, self.height_amount),
+            top=self.top,
+            bottom=self.bottom,
+            min_height=self.min_height)
+        return remove_defaults(attrs, Filler.__init__)
 
     # backwards compatibility, widget used to be stored as body
     get_body = WidgetDecoration._get_original_widget
     set_body = WidgetDecoration._set_original_widget
     body = property(get_body, set_body)
-    
+
     def selectable(self):
         """Return selectable from body."""
         return self._original_widget.selectable()
-    
-    def filler_values(self, size, focus):
-        """Return the number of rows to pad on the top and bottom.
-        
-        Override this method to define custom padding behaviour."""
-        (maxcol, maxrow) = size
-        
-        if self.height_type is None:
-            height = self._original_widget.rows((maxcol,),focus=focus)
-            return calculate_filler( self.valign_type,
-                self.valign_amount, 'fixed', height, 
-                None, maxrow )
-            
-        return calculate_filler( self.valign_type, self.valign_amount,
-            self.height_type, self.height_amount,
-            self.min_height, maxrow)
 
-    
+    def filler_values(self, size, focus):
+        """
+        Return the number of rows to pad on the top and bottom.
+
+        Override this method to define custom padding behaviour.
+        """
+        (maxcol, maxrow) = size
+
+        if self.height_type == PACK:
+            height = self._original_widget.rows((maxcol,),focus=focus)
+            return calculate_top_bottom_filler(maxrow,
+                self.valign_type, self.valign_amount,
+                GIVEN, height,
+                None, self.top, self.bottom)
+
+        return calculate_top_bottom_filler(maxrow,
+            self.valign_type, self.valign_amount,
+            self.height_type, self.height_amount,
+            self.min_height, self.top, self.bottom)
+
+
     def render(self, size, focus=False):
         """Render self.original_widget with space above and/or below."""
         (maxcol, maxrow) = size
         top, bottom = self.filler_values(size, focus)
-        
-        if self.height_type is None:
+
+        if self.height_type == PACK:
             canv = self._original_widget.render((maxcol,), focus)
         else:
             canv = self._original_widget.render((maxcol,maxrow-top-bottom),focus)
         canv = CompositeCanvas(canv)
-        
+
         if maxrow and canv.rows() > maxrow and canv.cursor is not None:
             cx, cy = canv.cursor
             if cy >= maxrow:
@@ -733,7 +830,7 @@ class Filler(WidgetDecoration):
     def keypress(self, size, key):
         """Pass keypress to self.original_widget."""
         (maxcol, maxrow) = size
-        if self.height_type is None:
+        if self.height_type == PACK:
             return self._original_widget.keypress((maxcol,), key)
 
         top, bottom = self.filler_values((maxcol,maxrow), True)
@@ -744,9 +841,9 @@ class Filler(WidgetDecoration):
         (maxcol, maxrow) = size
         if not hasattr(self._original_widget, 'get_cursor_coords'):
             return None
-            
+
         top, bottom = self.filler_values(size, True)
-        if self.height_type is None:
+        if self.height_type == PACK:
             coords = self._original_widget.get_cursor_coords((maxcol,))
         else:
             coords = self._original_widget.get_cursor_coords(
@@ -763,8 +860,8 @@ class Filler(WidgetDecoration):
         (maxcol, maxrow) = size
         if not hasattr(self._original_widget, 'get_pref_col'):
             return None
-        
-        if self.height_type is None:
+
+        if self.height_type == PACK:
             x = self._original_widget.get_pref_col((maxcol,))
         else:
             top, bottom = self.filler_values(size, True)
@@ -772,52 +869,72 @@ class Filler(WidgetDecoration):
                 (maxcol, maxrow-top-bottom))
 
         return x
-    
+
     def move_cursor_to_coords(self, size, col, row):
         """Pass to self.original_widget."""
         (maxcol, maxrow) = size
         if not hasattr(self._original_widget, 'move_cursor_to_coords'):
             return True
-        
+
         top, bottom = self.filler_values(size, True)
         if row < top or row >= maxcol-bottom:
             return False
 
-        if self.height_type is None:
+        if self.height_type == PACK:
             return self._original_widget.move_cursor_to_coords((maxcol,),
                 col, row-top)
         return self._original_widget.move_cursor_to_coords(
             (maxcol, maxrow-top-bottom), col, row-top)
-    
+
     def mouse_event(self, size, event, button, col, row, focus):
         """Pass to self.original_widget."""
         (maxcol, maxrow) = size
         if not hasattr(self._original_widget, 'mouse_event'):
             return False
-        
+
         top, bottom = self.filler_values(size, True)
-        if row < top or row >= maxcol-bottom:
+        if row < top or row >= maxrow-bottom:
             return False
 
-        if self.height_type is None:
+        if self.height_type == PACK:
             return self._original_widget.mouse_event((maxcol,),
                 event, button, col, row-top, focus)
-        return self._original_widget.mouse_event((maxcol, maxrow-top-bottom), 
+        return self._original_widget.mouse_event((maxcol, maxrow-top-bottom),
             event, button,col, row-top, focus)
 
-        
+class WidgetDisable(WidgetDecoration):
+    """
+    A decoration widget that disables interaction with the widget it
+    wraps.  This widget always passes focus=False to the wrapped widget,
+    even if it somehow does become the focus.
+    """
+    no_cache = ["rows"]
+    ignore_focus = True
+
+    def selectable(self):
+        return False
+    def rows(self, size, focus=False):
+        return self._original_widget.rows(size, False)
+    def sizing(self):
+        return self._original_widget.sizing()
+    def pack(self, size, focus=False):
+        return self._original_widget.pack(size, False)
+    def render(self, size, focus=False):
+        canv = self._original_widget.render(size, False)
+        return CompositeCanvas(canv)
+
 def normalize_align(align, err):
     """
     Split align into (align_type, align_amount).  Raise exception err
     if align doesn't match a valid alignment.
     """
     if align in (LEFT, CENTER, RIGHT):
-        return (align, 0)
-    elif type(align) == type(()) and len(align) == 2 and align[0] == RELATIVE:
+        return (align, None)
+    elif type(align) == tuple and len(align) == 2 and align[0] == RELATIVE:
         return align
-    raise err("align value %s is not one of 'left', 'center', "
-        "'right', ('relative', percentage 0=left 100=right)" 
-        % `align`)
+    raise err("align value %r is not one of 'left', 'center', "
+        "'right', ('relative', percentage 0=left 100=right)"
+        % (align,))
 
 def simplify_align(align_type, align_amount):
     """
@@ -834,14 +951,14 @@ def normalize_width(width, err):
     if width doesn't match a valid alignment.
     """
     if width in (CLIP, PACK):
-        return (width, 0)
-    elif type(width) == type(0):
+        return (width, None)
+    elif type(width) == int:
         return (GIVEN, width)
-    elif type(width) == type(()) and len(width) == 2 and width[0] == RELATIVE:
+    elif type(width) == tuple and len(width) == 2 and width[0] == RELATIVE:
         return width
-    raise err("width value %s is not one of fixed number of columns, "
-        "'pack', ('relative', percentage of total width), 'clip'" 
-        % `width`)
+    raise err("width value %r is not one of fixed number of columns, "
+        "'pack', ('relative', percentage of total width), 'clip'"
+        % (width,))
 
 def simplify_width(width_type, width_amount):
     """
@@ -853,118 +970,125 @@ def simplify_width(width_type, width_amount):
     elif width_type == GIVEN:
         return width_amount
     return (width_type, width_amount)
-        
-def decompose_align_width( align, width, err ):
-    # FIXME: remove this once it is no longer called from Overlay
-    try:
-        if align in ('left','center','right'):
-            align = (align,0)
-        align_type, align_amount = align
-        assert align_type in ('left','center','right','fixed left',
-            'fixed right','relative')
-    except:
-        raise err("align value %s is not one of 'left', 'center', "
-            "'right', ('fixed left', columns), ('fixed right', "
-            "columns), ('relative', percentage 0=left 100=right)" 
-            % `align`)
 
-    try:
-        if width is None:
-            width = None, None
-        elif type(width) == type(0):
-            width = 'fixed', width
-        width_type, width_amount = width
-        assert width_type in ('fixed','fixed right','fixed left',
-            'relative', None)
-    except:
-        raise err("width value %s is not one of ('fixed', columns "
-            "width), ('fixed right', columns), ('relative', "
-            "percentage of total width), None" % `width`)
-        
-    if width_type == 'fixed left' and align_type != 'fixed right':
-        raise err("fixed left width may only be used with fixed "
-            "right align")
-    if width_type == 'fixed right' and align_type != 'fixed left':
-        raise err("fixed right width may only be used with fixed "
-            "left align")
+def normalize_valign(valign, err):
+    """
+    Split align into (valign_type, valign_amount).  Raise exception err
+    if align doesn't match a valid alignment.
+    """
+    if valign in (TOP, MIDDLE, BOTTOM):
+        return (valign, None)
+    elif (isinstance(valign, tuple) and len(valign) == 2 and
+            valign[0] == RELATIVE):
+        return valign
+    raise err("valign value %r is not one of 'top', 'middle', "
+        "'bottom', ('relative', percentage 0=left 100=right)"
+        % (valign,))
 
-    return align_type, align_amount, width_type, width_amount
+def simplify_valign(valign_type, valign_amount):
+    """
+    Recombine (valign_type, valign_amount) into an valign value.
+    Inverse of normalize_valign.
+    """
+    if valign_type == RELATIVE:
+        return (valign_type, valign_amount)
+    return valign_type
 
+def normalize_height(height, err):
+    """
+    Split height into (height_type, height_amount).  Raise exception err
+    if height isn't valid.
+    """
+    if height in (FLOW, PACK):
+        return (height, None)
+    elif (isinstance(height, tuple) and len(height) == 2 and
+            height[0] == RELATIVE):
+        return height
+    elif isinstance(height, int):
+        return (GIVEN, height)
+    raise err("height value %r is not one of fixed number of columns, "
+        "'pack', ('relative', percentage of total height)"
+        % (height,))
 
-def decompose_valign_height( valign, height, err ):
-    try:
-        if valign in ('top','middle','bottom'):
-            valign = (valign,0)
-        valign_type, valign_amount = valign
-        assert valign_type in ('top','middle','bottom','fixed top','fixed bottom','relative')
-    except:
-        raise err, "Invalid valign: %s" % `valign`
-
-    try:
-        if height is None:
-            height = None, None
-        elif type(height) == type(0):
-            height=('fixed',height)
-        height_type, height_amount = height
-        assert height_type in (None, 'fixed','fixed bottom','fixed top','relative')
-    except:
-        raise err, "Invalid height: %s"%`height`
-        
-    if height_type == 'fixed top' and valign_type != 'fixed bottom':
-        raise err, "fixed top height may only be used with fixed bottom valign"
-    if height_type == 'fixed bottom' and valign_type != 'fixed top':
-        raise err, "fixed bottom height may only be used with fixed top valign"
-        
-    return valign_type, valign_amount, height_type, height_amount
+def simplify_height(height_type, height_amount):
+    """
+    Recombine (height_type, height_amount) into an height value.
+    Inverse of normalize_height.
+    """
+    if height_type in (FLOW, PACK):
+        return height_type
+    elif height_type == GIVEN:
+        return height_amount
+    return (height_type, height_amount)
 
 
-def calculate_filler( valign_type, valign_amount, height_type, height_amount, 
-              min_height, maxrow ):
-    if height_type == 'fixed':
-        height = height_amount
-    elif height_type == 'relative':
-        height = int(height_amount*maxrow/100+.5)
+def calculate_top_bottom_filler(maxrow, valign_type, valign_amount, height_type,
+        height_amount, min_height, top, bottom):
+    """
+    Return the amount of filler (or clipping) on the top and
+    bottom part of maxrow rows to satisfy the following:
+
+    valign_type -- 'top', 'middle', 'bottom', 'relative'
+    valign_amount -- a percentage when align_type=='relative'
+    height_type -- 'given', 'relative', 'clip'
+    height_amount -- a percentage when width_type=='relative'
+        otherwise equal to the height of the widget
+    min_height -- a desired minimum width for the widget or None
+    top -- a fixed number of rows to fill on the top
+    bottom -- a fixed number of rows to fill on the bottom
+
+    >>> ctbf = calculate_top_bottom_filler
+    >>> ctbf(15, 'top', 0, 'given', 10, None, 2, 0)
+    (2, 3)
+    >>> ctbf(15, 'relative', 0, 'given', 10, None, 2, 0)
+    (2, 3)
+    >>> ctbf(15, 'relative', 100, 'given', 10, None, 2, 0)
+    (5, 0)
+    >>> ctbf(15, 'middle', 0, 'given', 4, None, 2, 0)
+    (6, 5)
+    >>> ctbf(15, 'middle', 0, 'given', 18, None, 2, 0)
+    (0, 0)
+    >>> ctbf(20, 'top', 0, 'relative', 60, None, 0, 0)
+    (0, 8)
+    >>> ctbf(20, 'relative', 30, 'relative', 60, None, 0, 0)
+    (2, 6)
+    >>> ctbf(20, 'relative', 30, 'relative', 60, 14, 0, 0)
+    (2, 4)
+    """
+    if height_type == RELATIVE:
+        maxheight = max(maxrow - top - bottom, 0)
+        height = int_scale(height_amount, 101, maxheight + 1)
         if min_height is not None:
-                height = max(height, min_height)
+            height = max(height, min_height)
     else:
-        assert height_type in ('fixed bottom','fixed top')
-        height = maxrow-height_amount-valign_amount
-        if min_height is not None:
-                height = max(height, min_height)
-    
-    if height >= maxrow:
-        # use the full space (no padding)
-        return 0, 0
-        
-    if valign_type == 'fixed top':
-        top = valign_amount
-        if top+height <= maxrow:
-            return top, maxrow-top-height
-        # need to shrink top
-        return maxrow-height, 0
-    elif valign_type == 'fixed bottom':
-        bottom = valign_amount
-        if bottom+height <= maxrow:
-            return maxrow-bottom-height, bottom
-        # need to shrink bottom
-        return 0, maxrow-height        
-    elif valign_type == 'relative':
-        top = int( (maxrow-height)*valign_amount/100+.5 )
-    elif valign_type == 'bottom':
-        top = maxrow-height    
-    elif valign_type == 'middle':
-        top = int( (maxrow-height)/2 )
-    else: #self.valign_type == 'top'
-        top = 0
-    
-    if top+height > maxrow: top = maxrow-height
-    if top < 0: top = 0
-    
-    bottom = maxrow-height-top
-    return top, bottom     
+        height = height_amount
+
+    standard_alignments = {TOP:0, MIDDLE:50, BOTTOM:100}
+    valign = standard_alignments.get(valign_type, valign_amount)
+
+    # add the remainder of top/bottom to the filler
+    filler = maxrow - height - top - bottom
+    bottom += int_scale(100 - valign, 101, filler + 1)
+    top = maxrow - height - bottom
+
+    # reduce filler if we are clipping an edge
+    if bottom < 0 < top:
+        shift = min(top, -bottom)
+        top -= shift
+        bottom += shift
+    elif top < 0 < bottom:
+        shift = min(bottom, -top)
+        bottom -= shift
+        top += shift
+
+    # no negative values for filler at the moment
+    top = max(top, 0)
+    bottom = max(bottom, 0)
+
+    return top, bottom
 
 
-def calculate_left_right_padding(maxcol, align_type, align_amount, 
+def calculate_left_right_padding(maxcol, align_type, align_amount,
     width_type, width_amount, min_width, left, right):
     """
     Return the amount of padding (or clipping) on the left and
@@ -980,19 +1104,19 @@ def calculate_left_right_padding(maxcol, align_type, align_amount,
     right -- a fixed number of columns to pad on the right
 
     >>> clrp = calculate_left_right_padding
-    >>> clrp(15, 'left', 0, 'fixed', 10, None, 2, 0)
+    >>> clrp(15, 'left', 0, 'given', 10, None, 2, 0)
     (2, 3)
-    >>> clrp(15, 'relative', 0, 'fixed', 10, None, 2, 0)
+    >>> clrp(15, 'relative', 0, 'given', 10, None, 2, 0)
     (2, 3)
-    >>> clrp(15, 'relative', 100, 'fixed', 10, None, 2, 0)
+    >>> clrp(15, 'relative', 100, 'given', 10, None, 2, 0)
     (5, 0)
-    >>> clrp(15, 'center', 0, 'fixed', 4, None, 2, 0)
+    >>> clrp(15, 'center', 0, 'given', 4, None, 2, 0)
     (6, 5)
     >>> clrp(15, 'left', 0, 'clip', 18, None, 0, 0)
     (0, -3)
     >>> clrp(15, 'right', 0, 'clip', 18, None, 0, -1)
     (-2, -1)
-    >>> clrp(15, 'center', 0, 'fixed', 18, None, 2, 0)
+    >>> clrp(15, 'center', 0, 'given', 18, None, 2, 0)
     (0, 0)
     >>> clrp(20, 'left', 0, 'relative', 60, None, 0, 0)
     (0, 8)
@@ -1008,13 +1132,13 @@ def calculate_left_right_padding(maxcol, align_type, align_amount,
             width = max(width, min_width)
     else:
         width = width_amount
-    
+
     standard_alignments = {LEFT:0, CENTER:50, RIGHT:100}
     align = standard_alignments.get(align_type, align_amount)
 
     # add the remainder of left/right the padding
     padding = maxcol - width - left - right
-    right += int_scale(100 - align, 101, padding + 1) 
+    right += int_scale(100 - align, 101, padding + 1)
     left = maxcol - width - right
 
     # reduce padding if we are clipping an edge
@@ -1026,62 +1150,14 @@ def calculate_left_right_padding(maxcol, align_type, align_amount,
         shift = min(right, -left)
         right -= shift
         left += shift
-    
+
     # only clip if width_type == 'clip'
     if width_type != CLIP and (left < 0 or right < 0):
         left = max(left, 0)
         right = max(right, 0)
-    
+
     return left, right
 
-
-def calculate_padding( align_type, align_amount, width_type, width_amount,
-        min_width, maxcol, clip=False ):
-    # FIXME: remove this when Overlay is no longer calling it
-    if width_type == 'fixed':
-        width = width_amount
-    elif width_type == 'relative':
-        width = int(width_amount*maxcol/100+.5)
-        if min_width is not None:
-                width = max(width, min_width)
-    else: 
-        assert width_type in ('fixed right', 'fixed left')
-        width = maxcol-width_amount-align_amount
-        if min_width is not None:
-                width = max(width, min_width)
-    
-    if width == maxcol or (width > maxcol and not clip):
-        # use the full space (no padding)
-        return 0, 0
-        
-    if align_type == 'fixed left':
-        left = align_amount
-        if left+width <= maxcol:
-            return left, maxcol-left-width
-        # need to shrink left
-        return maxcol-width, 0
-    elif align_type == 'fixed right':
-        right = align_amount
-        if right+width <= maxcol:
-            return maxcol-right-width, right
-        # need to shrink right
-        return 0, maxcol-width        
-    elif align_type == 'relative':
-        left = int( (maxcol-width)*align_amount/100+.5 )
-    elif align_type == 'right':
-        left = maxcol-width    
-    elif align_type == 'center':
-        left = int( (maxcol-width)/2 )
-    else: 
-        assert align_type == 'left'
-        left = 0
-    
-    if width < maxcol:
-        if left+width > maxcol: left = maxcol-width
-        if left < 0: left = 0
-    
-    right = maxcol-width-left
-    return left, right     
 
 
 def _test():

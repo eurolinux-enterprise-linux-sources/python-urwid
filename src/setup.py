@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Urwid setup.py exports the useful bits
-#    Copyright (C) 2004-2007  Ian Ward
+#    Copyright (C) 2004-2012  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -20,16 +20,23 @@
 # Urwid web site: http://excess.org/urwid/
 
 try:
-    from setuptools import setup, Extension
+    PYTHON3 = not str is bytes
+except NameError:
+    PYTHON3 = False
+
+try:
+    from setuptools import setup, Extension # distribute required for Python 3
     have_setuptools = True
 except ImportError:
+    if PYTHON3:
+        raise
     from distutils.core import setup, Extension
     have_setuptools = False
 
 import os
 
-import urwid
-release = urwid.__version__
+exec(open(os.path.join("urwid","version.py")).read())
+release = __version__
 
 setup_d = {
     'name':"urwid",
@@ -37,42 +44,39 @@ setup_d = {
     'author':"Ian Ward",
     'author_email':"ian@excess.org",
     'ext_modules':[Extension('urwid.str_util', sources=['source/str_util.c'])],
+    'packages':['urwid'],
     'url':"http://excess.org/urwid/",
     'download_url':"http://excess.org/urwid/urwid-%s.tar.gz"%release,
     'license':"LGPL",
-    'keywords':"curses ui widget scroll listbox user interface text layout consolt ncurses",
+    'keywords':"curses ui widget scroll listbox user interface text layout console ncurses",
     'platforms':"unix-like",
-    'description':(
-"A console UI library featuring fluid interface resizing, UTF-8 support,"
-" multiple text layouts, simple attribute markup, powerful scrolling list"
-" boxes and flexible interface design."),
+    'description': "A full-featured console (xterm et al.) user interface library",
     'long_description':"""
 Urwid is a console user interface library.  It includes many features
 useful for text console application developers including:
 
-- Fluid interface resizing (xterm window resizing / fbset on Linux console)
+- Applcations resize quickly and smoothly
+- Automatic, programmable text alignment and wrapping
+- Simple markup for setting text attributes within blocks of text
+- Powerful list box with programmable content for scrolling all widget types
+- Your choice of event loops: Twisted, Glib or built-in select-based loop
+- Pre-built widgets include edit boxes, buttons, check boxes and radio buttons
+- Display modules include raw, curses, and experimental LCD and web displays
 - Support for UTF-8, simple 8-bit and CJK encodings
 - 256 and 88 color mode support
-- Multiple text alignment and wrapping modes built-in
-- Ability to create user-defined text layout classes
-- Simple markup for setting text attributes
-- Powerful list box that handles scrolling between different widget types
-- List box contents may be managed with a user-defined class
-- Flexible edit box for editing many different types of text
-- Buttons, check boxes and radio buttons
-- Customizable layout for all widgets
-- Web application display mode using Apache and CGI
-- Easy interface for creating HTML screen shots
-
+- Python 3.2 support
 
 Home Page:
   http://excess.org/urwid/
+
+Documentation:
+  http://excess.org/urwid/docs/
 
 Example Program Screenshots:
   http://excess.org/urwid/examples.html
 """[1:],
     'classifiers':[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Environment :: Console",
         "Environment :: Console :: Curses",
         "Intended Audience :: Developers",
@@ -82,21 +86,24 @@ Example Program Screenshots:
         "Operating System :: MacOS :: MacOS X",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Software Development :: Widget Sets",
+        "Programming Language :: Python :: 2",
+        "Programming Language :: Python :: 2.4",
+        "Programming Language :: Python :: 2.5",
+        "Programming Language :: Python :: 2.6",
+        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.2",
+        "Programming Language :: Python :: 3.3",
         ],
-    'packages':['urwid'],
      }
 
 if have_setuptools:
     setup_d['zip_safe'] = False
+    setup_d['test_suite'] = 'urwid.tests.test_all'
 
-
-try:
-    True
-except:
-    # python 2.1's distutils doesn't understand these:
-    del setup_d['classifiers']
-    del setup_d['download_url']
+if PYTHON3:
+    setup_d['use_2to3'] = True
 
 if __name__ == "__main__":
-    setup( ** setup_d )
+    setup(**setup_d)
 

@@ -1,7 +1,8 @@
 #!/usr/bin/python
 #
-# Urwid __init__.py 
-#    Copyright (C) 2004-2010  Ian Ward
+# Urwid __init__.py - all the stuff you're likely to care about
+#
+#    Copyright (C) 2004-2012  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -19,45 +20,58 @@
 #
 # Urwid web site: http://excess.org/urwid/
 
-__all__ = [
-    'BoxWidget','Frame','Filler','ListBox','SimpleListWalker',
-    'ListWalker',
-    'WidgetWrap','AttrWrap','Padding','Divider','LineBox','SolidFill',
-    'Columns','Pile','GridFlow','BoxAdapter','Overlay',
-    'FlowWidget','Text','Edit','IntEdit','Button','CheckBox','RadioButton',
-    'BarGraph','ProgressBar','GraphVScale','BigText',
-    'Canvas','CanvasCombine','CanvasJoin','CanvasCache','CompositeCanvas',
-    'TextCanvas', 'SolidCanvas',
-    'TextLayout', 'StandardTextLayout', 'default_layout',
-    'set_encoding','get_encoding_mode','supports_unicode',
-    'Thin3x3Font','Thin4x3Font','HalfBlock5x4Font','HalfBlock6x5Font',
-    'HalfBlockHeavy6x5Font','Thin6x6Font','HalfBlock7x7Font',
-    'Font','get_all_fonts',
-    'MetaSignals', 
-    'emit_signal', 'register_signal', 'connect_signal', 'disconnect_signal',
-    'MonitoredList',
-    'command_map',
-    'MainLoop', 'SelectEventLoop', 'GLibEventLoop', 'TwistedEventLoop',
-    'AttrSpec', 'AttrSpecError',
-    ]
+from urwid.version import VERSION, __version__
+from urwid.widget import (FLOW, BOX, FIXED, LEFT, RIGHT, CENTER, TOP, MIDDLE,
+    BOTTOM, SPACE, ANY, CLIP, PACK, GIVEN, RELATIVE, RELATIVE_100, WEIGHT,
+    WidgetMeta,
+    WidgetError, Widget, FlowWidget, BoxWidget, fixed_size, FixedWidget,
+    Divider, SolidFill, TextError, Text, EditError, Edit, IntEdit,
+    delegate_to_widget_mixin, WidgetWrapError, WidgetWrap)
+from urwid.decoration import (WidgetDecoration, WidgetPlaceholder,
+    AttrMapError, AttrMap, AttrWrap, BoxAdapterError, BoxAdapter, PaddingError,
+    Padding, FillerError, Filler, WidgetDisable)
+from urwid.container import (GridFlowError, GridFlow, OverlayError, Overlay,
+    FrameError, Frame, PileError, Pile, ColumnsError, Columns,
+    WidgetContainerMixin)
+from urwid.wimp import (SelectableIcon, CheckBoxError, CheckBox, RadioButton,
+    Button, PopUpLauncher, PopUpTarget)
+from urwid.listbox import (ListWalkerError, ListWalker, PollingListWalker,
+    SimpleListWalker, SimpleFocusListWalker, ListBoxError, ListBox)
+from urwid.graphics import (BigText, LineBox, BarGraphMeta, BarGraphError,
+    BarGraph, GraphVScale, ProgressBar, scale_bar_values)
+from urwid.canvas import (CanvasCache, CanvasError, Canvas, TextCanvas,
+    BlankCanvas, SolidCanvas, CompositeCanvas, CanvasCombine, CanvasOverlay,
+    CanvasJoin)
+from urwid.font import (get_all_fonts, Font, Thin3x3Font, Thin4x3Font,
+    HalfBlock5x4Font, HalfBlock6x5Font, HalfBlockHeavy6x5Font, Thin6x6Font,
+    HalfBlock7x7Font)
+from urwid.signals import (MetaSignals, Signals, emit_signal, register_signal,
+    connect_signal, disconnect_signal)
+from urwid.monitored_list import MonitoredList, MonitoredFocusList
+from urwid.command_map import (CommandMap, command_map,
+    REDRAW_SCREEN, CURSOR_UP, CURSOR_DOWN, CURSOR_LEFT, CURSOR_RIGHT,
+    CURSOR_PAGE_UP, CURSOR_PAGE_DOWN, CURSOR_MAX_LEFT, CURSOR_MAX_RIGHT,
+    ACTIVATE)
+from urwid.main_loop import ExitMainLoop, MainLoop, SelectEventLoop
+try:
+    from urwid.main_loop import GLibEventLoop, TwistedEventLoop
+except ImportError:
+    pass
+from urwid.text_layout import (TextLayout, StandardTextLayout, default_layout,
+    LayoutSegment)
+from urwid.display_common import (UPDATE_PALETTE_ENTRY, DEFAULT, BLACK,
+    DARK_RED, DARK_GREEN, BROWN, DARK_BLUE, DARK_MAGENTA, DARK_CYAN,
+    LIGHT_GRAY, DARK_GRAY, LIGHT_RED, LIGHT_GREEN, YELLOW, LIGHT_BLUE,
+    LIGHT_MAGENTA, LIGHT_CYAN, WHITE, AttrSpecError, AttrSpec, RealTerminal,
+    ScreenError, BaseScreen)
+from urwid.util import (calc_text_pos, calc_width, is_wide_char,
+    move_next_char, move_prev_char, within_double_byte, detected_encoding,
+    set_encoding, get_encoding_mode, apply_target_encoding, supports_unicode,
+    calc_trim_text, TagMarkupException, decompose_tagmarkup, MetaSuper,
+    int_scale, is_mouse_event)
+from urwid.treetools import (TreeWidgetError, TreeWidget, TreeNode,
+    ParentNode, TreeWalker, TreeListBox)
+from urwid.vterm import (TermModes, TermCharset, TermScroller, TermCanvas,
+    Terminal)
 
-VERSION = (0, 9, 9, 1)
-__version__ = ''.join(['-.'[type(x) == int]+str(x) for x in VERSION])[1:]
-
-
-from widget import *
-from decoration import *
-from container import *
-from wimp import *
-from listbox import *
-from graphics import *
-from canvas import *
-from font import *
-from signals import *
-from monitored_list import *
-from command_map import *
-from main_loop import *
-from text_layout import *
-from display_common import *
-
-import raw_display
+from urwid import raw_display

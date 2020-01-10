@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Urwid escape sequences common to curses_display and raw_display
-#    Copyright (C) 2004-2006  Ian Ward
+#    Copyright (C) 2004-2011  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -24,22 +24,28 @@
 Terminal Escape Sequences for input and display
 """
 
-import util
-import os
 import re
 
-import encodings
-utf8decode = lambda s: encodings.codecs.utf_8_decode(s)[0]
+try:
+    from urwid import str_util
+except ImportError:
+    from urwid import old_str_util as str_util
+
+from urwid.compat import bytes, bytes3
+
+within_double_byte = str_util.within_double_byte
 
 SO = "\x0e"
 SI = "\x0f"
+IBMPC_ON = "\x1b[11m"
+IBMPC_OFF = "\x1b[10m"
 
 DEC_TAG = "0"
-DEC_SPECIAL_CHARS = utf8decode("◆▒°±┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·")
-ALT_DEC_SPECIAL_CHARS = u"`afgjklmnopqrstuvwxyz{|}~"
+DEC_SPECIAL_CHARS = u'▮◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·'
+ALT_DEC_SPECIAL_CHARS = u"_`abcdefghijklmnopqrstuvwxyz{|}~"
 
 DEC_SPECIAL_CHARMAP = {}
-assert len(DEC_SPECIAL_CHARS) == len(ALT_DEC_SPECIAL_CHARS), `DEC_SPECIAL_CHARS, ALT_DEC_SPECIAL_CHARS`
+assert len(DEC_SPECIAL_CHARS) == len(ALT_DEC_SPECIAL_CHARS), repr((DEC_SPECIAL_CHARS, ALT_DEC_SPECIAL_CHARS))
 for c, alt in zip(DEC_SPECIAL_CHARS, ALT_DEC_SPECIAL_CHARS):
     DEC_SPECIAL_CHARMAP[ord(c)] = SO + alt + SI
 
@@ -56,7 +62,7 @@ class MoreInputRequired(Exception):
 
 def escape_modifier( digit ):
     mode = ord(digit) - ord("1")
-    return "shift "*(mode&1) + "meta "*((mode&2)/2) + "ctrl "*((mode&4)/4)
+    return "shift "*(mode&1) + "meta "*((mode&2)//2) + "ctrl "*((mode&4)//4)
     
 
 input_sequences = [
@@ -81,14 +87,26 @@ input_sequences = [
     ('Oo','/'),('Oj','*'),('Om','-'),('Ok','+'),
 
     ('[Z','shift tab'),
-] + [ 
+    ('On', '.'),
+] + [
+    (prefix + letter, modifier + key)
+    for prefix, modifier in zip('O[', ('meta ', 'shift '))
+    for letter, key in zip('abcd', ('up', 'down', 'right', 'left'))
+] + [
+    ("[" + digit + symbol, modifier + key)
+    for modifier, symbol in zip(('shift ', 'meta '), '$^')
+    for digit, key in zip('235678',
+        ('insert', 'delete', 'page up', 'page down', 'home', 'end'))
+] + [
+    ('O' + chr(ord('p')+n), str(n)) for n in range(10)
+] + [
     # modified cursor keys + home, end, 5 -- [#X and [1;#X forms
     (prefix+digit+letter, escape_modifier(digit) + key)
     for prefix in "[","[1;"
     for digit in "12345678"
     for letter,key in zip("ABCDEFGH",
         ('up','down','right','left','5','end','5','home'))
-] + [ 
+] + [
     # modified F1-F4 keys -- O#X form
     ("O"+digit+letter, escape_modifier(digit) + key)
     for digit in "12345678"
@@ -98,8 +116,9 @@ input_sequences = [
     ("["+str(num)+";"+digit+"~", escape_modifier(digit) + key)
     for digit in "12345678"
     for num,key in zip(
-        (11,12,13,14,15,17,18,19,20,21,23,24,25,26,28,29,31,32,33,34),
-        ('f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11',
+        (3,5,6,11,12,13,14,15,17,18,19,20,21,23,24,25,26,28,29,31,32,33,34),
+        ('delete', 'page up', 'page down',
+        'f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11',
         'f12','f13','f14','f15','f16','f17','f18','f19','f20'))
 ] + [
     # mouse reporting (special handling done in KeyqueueTrie)
@@ -112,11 +131,11 @@ class KeyqueueTrie(object):
     def __init__( self, sequences ):
         self.data = {}
         for s, result in sequences:
-            assert type(result) != type({})
+            assert type(result) != dict
             self.add(self.data, s, result)
     
     def add(self, root, s, result):
-        assert type(root) == type({}), "trie conflict detected"
+        assert type(root) == dict, "trie conflict detected"
         assert len(s) > 0, "trie conflict detected"
         
         if root.has_key(ord(s[0])):
@@ -134,7 +153,7 @@ class KeyqueueTrie(object):
         return result
     
     def get_recurse(self, root, keys, more_available):
-        if type(root) != type({}):
+        if type(root) != dict:
             if root == "mouse":
                 return self.read_mouse_info(keys, 
                     more_available)
@@ -155,7 +174,7 @@ class KeyqueueTrie(object):
             return None
         
         b = keys[0] - 32
-        x, y = keys[1] - 33, keys[2] - 33  # start from 0
+        x, y = (keys[1] - 33)%256, (keys[2] - 33)%256  # supports 0-255
         
         prefix = ""
         if b & 4:    prefix = prefix + "shift "
@@ -292,16 +311,16 @@ def process_keyqueue(codes, more_available):
     if code >27 and code <32:
         return ["ctrl %s" % chr(ord('A')+code-1)], codes[1:]
     
-    em = util.get_encoding_mode()
+    em = str_util.get_byte_encoding()
     
     if (em == 'wide' and code < 256 and  
-        util.within_double_byte(chr(code),0,0)):
+        within_double_byte(chr(code),0,0)):
         if not codes[1:]:
             if more_available:
                 raise MoreInputRequired()
         if codes[1:] and codes[1] < 256:
             db = chr(code)+chr(codes[1])
-            if util.within_double_byte(db, 0, 1):
+            if within_double_byte(db, 0, 1):
                 return [db], codes[2:]
     if em == 'utf8' and code>127 and code<256:
         if code & 0xe0 == 0xc0: # 2-byte form
@@ -322,8 +341,10 @@ def process_keyqueue(codes, more_available):
             k = codes[i+1]
             if k>256 or k&0xc0 != 0x80:
                 return ["<%d>"%code], codes[1:]
-        
-        s = "".join([chr(c)for c in codes[:need_more+1]])
+
+        s = bytes3(codes[:need_more+1])
+
+        assert isinstance(s, bytes)
         try:
             return [s.decode("utf-8")], codes[need_more+1:]
         except UnicodeDecodeError:
@@ -377,8 +398,8 @@ INSERT_ON = ESC + "[4h"
 INSERT_OFF = ESC + "[4l"
 
 def set_cursor_position( x, y ):
-    assert type(x) == type(0)
-    assert type(y) == type(0)
+    assert type(x) == int
+    assert type(y) == int
     return ESC+"[%d;%dH" %(y+1, x+1)
 
 def move_cursor_right(x):
@@ -401,4 +422,4 @@ MOUSE_TRACKING_OFF = ESC+"[?1002l"+ESC+"[?1000l"
 
 DESIGNATE_G1_SPECIAL = ESC+")0"
 
-
+ERASE_IN_LINE_RIGHT = ESC+"[K"

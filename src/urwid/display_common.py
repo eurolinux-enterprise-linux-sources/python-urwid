@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # Urwid common display code
-#    Copyright (C) 2004-2007  Ian Ward
+#    Copyright (C) 2004-2011  Ian Ward
 #
 #    This library is free software; you can redistribute it and/or
 #    modify it under the terms of the GNU Lesser General Public
@@ -18,14 +18,21 @@
 #
 # Urwid web site: http://excess.org/urwid/
 
+import os
 import sys
 import termios
 
-from util import int_scale
-import signals
+from urwid.util import int_scale
+from urwid import signals
+from urwid.compat import B, bytes3
+
+# for replacing unprintable bytes with '?'
+UNPRINTABLE_TRANS_TABLE = B("?") * 32 + bytes3(range(32,256))
+
 
 # signals sent by BaseScreen
 UPDATE_PALETTE_ENTRY = "update palette entry"
+INPUT_DESCRIPTORS_CHANGED = "input descriptors changed"
 
 
 # AttrSpec internal values
@@ -78,8 +85,9 @@ _HIGH_88_COLOR = 0x00100000
 _STANDOUT = 0x02000000
 _UNDERLINE = 0x04000000
 _BOLD = 0x08000000
+_BLINK = 0x10000000
 _FG_MASK = (_FG_COLOR_MASK | _FG_BASIC_COLOR | _FG_HIGH_COLOR |
-    _STANDOUT | _UNDERLINE | _BOLD)
+    _STANDOUT | _UNDERLINE | _BLINK | _BOLD)
 _BG_MASK = _BG_COLOR_MASK | _BG_BASIC_COLOR | _BG_HIGH_COLOR
 
 DEFAULT = 'default'
@@ -122,6 +130,7 @@ _BASIC_COLORS = [
 _ATTRIBUTES = {
     'bold': _BOLD,
     'underline': _UNDERLINE,
+    'blink': _BLINK,
     'standout': _STANDOUT,
 }
 
@@ -137,7 +146,7 @@ def _value_lookup_table(values, size):
     [0, 0, 0, 0, 1, 1, 1, 1, 2, 2]
     """
 
-    middle_values = [0] + [(values[i] + values[i + 1] + 1) / 2 
+    middle_values = [0] + [(values[i] + values[i + 1] + 1) // 2
         for i in range(len(values) - 1)] + [size]
     lookup_table = []
     for i in range(len(middle_values)-1):
@@ -179,10 +188,10 @@ _GRAY_88_LOOKUP_101 = [_GRAY_88_LOOKUP[int_scale(n, 101, 0x100)]
 def _gray_num_256(gnum):
     """Return ths color number for gray number gnum.
 
-    Color cube black and white are returned for 0 and %d respectively
+    Color cube black and white are returned for 0 and 25 respectively
     since those values aren't included in the gray scale.
 
-    """ % (_GRAY_SIZE_256+1)
+    """
     # grays start from index 1
     gnum -= 1
 
@@ -196,10 +205,10 @@ def _gray_num_256(gnum):
 def _gray_num_88(gnum):
     """Return ths color number for gray number gnum.
 
-    Color cube black and white are returned for 0 and %d respectively
+    Color cube black and white are returned for 0 and 9 respectively
     since those values aren't included in the gray scale.
 
-    """ % (_GRAY_SIZE_88+1)
+    """
     # gnums start from index 1
     gnum -= 1
 
@@ -236,8 +245,8 @@ def _color_desc_256(num):
         return 'h%d' % num
     if num < _GRAY_START_256:
         num -= _CUBE_START
-        b, num = num % _CUBE_SIZE_256, num / _CUBE_SIZE_256
-        g, num = num % _CUBE_SIZE_256, num / _CUBE_SIZE_256
+        b, num = num % _CUBE_SIZE_256, num // _CUBE_SIZE_256
+        g, num = num % _CUBE_SIZE_256, num // _CUBE_SIZE_256
         r = num % _CUBE_SIZE_256
         return '#%x%x%x' % (_CUBE_STEPS_256_16[r], _CUBE_STEPS_256_16[g],
             _CUBE_STEPS_256_16[b])
@@ -269,8 +278,8 @@ def _color_desc_88(num):
         return 'h%d' % num
     if num < _GRAY_START_88:
         num -= _CUBE_START
-        b, num = num % _CUBE_SIZE_88, num / _CUBE_SIZE_88
-        g, r= num % _CUBE_SIZE_88, num / _CUBE_SIZE_88
+        b, num = num % _CUBE_SIZE_88, num // _CUBE_SIZE_88
+        g, r= num % _CUBE_SIZE_88, num // _CUBE_SIZE_88
         return '#%x%x%x' % (_CUBE_STEPS_88_16[r], _CUBE_STEPS_88_16[g],
             _CUBE_STEPS_88_16[b])
     return 'g%d' % _GRAY_STEPS_88_101[num - _GRAY_START_88]
@@ -310,8 +319,8 @@ def _parse_color_256(desc):
             rgb = int(desc[1:], 16)
             if rgb < 0:
                 return None
-            b, rgb = rgb % 16, rgb / 16
-            g, r = rgb % 16, rgb / 16
+            b, rgb = rgb % 16, rgb // 16
+            g, r = rgb % 16, rgb // 16
             # find the closest rgb values
             r = _CUBE_256_LOOKUP_16[r]
             g = _CUBE_256_LOOKUP_16[g]
@@ -379,8 +388,8 @@ def _parse_color_88(desc):
             rgb = int(desc[1:], 16)
             if rgb < 0:
                 return None
-            b, rgb = rgb % 16, rgb / 16
-            g, r = rgb % 16, rgb / 16
+            b, rgb = rgb % 16, rgb // 16
+            g, r = rgb % 16, rgb // 16
             # find the closest rgb values
             r = _CUBE_88_LOOKUP_16[r]
             g = _CUBE_88_LOOKUP_16[g]
@@ -489,6 +498,7 @@ class AttrSpec(object):
         >> _BG_SHIFT)
     bold = property(lambda s: s._value & _BOLD != 0)
     underline = property(lambda s: s._value & _UNDERLINE != 0)
+    blink = property(lambda s: s._value & _BLINK != 0)
     standout = property(lambda s: s._value & _STANDOUT != 0)
 
     def _colors(self):
@@ -530,7 +540,7 @@ class AttrSpec(object):
     def _foreground(self):
         return (self._foreground_color() +
             ',bold' * self.bold + ',standout' * self.standout +
-            ',underline' * self.underline)
+            ',blink' * self.blink + ',underline' * self.underline)
 
     def _set_foreground(self, foreground):
         color = None
@@ -641,7 +651,7 @@ class RealTerminal(object):
         self._old_signal_keys = None
         
     def tty_signal_keys(self, intr=None, quit=None, start=None, 
-        stop=None, susp=None):
+        stop=None, susp=None, fileno=None):
         """
         Read and/or set the tty's signal charater settings.
         This function returns the current settings as a tuple.
@@ -655,8 +665,12 @@ class RealTerminal(object):
         then the original settings will be restored when stop()
         is called.
         """
-        fd = sys.stdin.fileno()
-        tattr = termios.tcgetattr(fd)
+        if fileno is None:
+            fileno = sys.stdin.fileno()
+        if not os.isatty(fileno):
+            return
+
+        tattr = termios.tcgetattr(fileno)
         sattr = tattr[6]
         skeys = (sattr[termios.VINTR], sattr[termios.VQUIT],
             sattr[termios.VSTART], sattr[termios.VSTOP],
@@ -677,7 +691,7 @@ class RealTerminal(object):
         if intr is not None or quit is not None or \
             start is not None or stop is not None or \
             susp is not None:
-            termios.tcsetattr(fd, termios.TCSADRAIN, tattr)
+            termios.tcsetattr(fileno, termios.TCSADRAIN, tattr)
             self._signal_keys_set = True
         
         return skeys
@@ -691,35 +705,45 @@ class BaseScreen(object):
     Base class for Screen classes (raw_display.Screen, .. etc)
     """
     __metaclass__ = signals.MetaSignals
-    signals = [UPDATE_PALETTE_ENTRY]
+    signals = [UPDATE_PALETTE_ENTRY, INPUT_DESCRIPTORS_CHANGED]
 
     def __init__(self):
         super(BaseScreen,self).__init__()
         self._palette = {}
+        self._started = False
+
+    started = property(lambda self: self._started)
+
+    def start(self):
+        self._started = True
+
+    def stop(self):
+        self._started = False
+
 
     def register_palette(self, palette):
         """Register a set of palette entries.
 
-        palette -- a list of (name, like_other_name) or 
-            (name, foreground, background, mono, foreground_high, 
-            background_high) tuples
+        palette -- a list of (name, like_other_name) or
+        (name, foreground, background, mono, foreground_high,
+        background_high) tuples
 
             The (name, like_other_name) format will copy the settings
             from the palette entry like_other_name, which must appear
             before this tuple in the list.
-            
-            The mono and foreground/background_high values are 
-            optional ie. the second tuple format may have 3, 4 or 6 
-            values.  See register_palette_entry() for a description 
+
+            The mono and foreground/background_high values are
+            optional ie. the second tuple format may have 3, 4 or 6
+            values.  See register_palette_entry() for a description
             of the tuple values.
         """
-        
+
         for item in palette:
             if len(item) in (3,4,6):
                 self.register_palette_entry(*item)
                 continue
             if len(item) != 2:
-                raise ScreenError("Invalid register_palette entry: %s" % 
+                raise ScreenError("Invalid register_palette entry: %s" %
                     repr(item))
             name, like_name = item
             if not self._palette.has_key(like_name):
@@ -731,14 +755,15 @@ class BaseScreen(object):
         """Register a single palette entry.
 
         name -- new entry/attribute name
-        foreground -- a string containing a comma-separated foreground 
-            color and settings
+
+        foreground -- a string containing a comma-separated foreground
+        color and settings
 
             Color values:
             'default' (use the terminal's default foreground),
             'black', 'dark red', 'dark green', 'brown', 'dark blue',
             'dark magenta', 'dark cyan', 'light gray', 'dark gray',
-            'light red', 'light green', 'yellow', 'light blue', 
+            'light red', 'light green', 'yellow', 'light blue',
             'light magenta', 'light cyan', 'white'
 
             Settings:
@@ -746,7 +771,7 @@ class BaseScreen(object):
 
             Some terminals use 'bold' for bright colors.  Most terminals
             ignore the 'blink' setting.  If the color is not given then
-            'default' will be assumed. 
+            'default' will be assumed.
 
         background -- a string containing the background color
 
@@ -754,16 +779,16 @@ class BaseScreen(object):
             'default' (use the terminal's default background),
             'black', 'dark red', 'dark green', 'brown', 'dark blue',
             'dark magenta', 'dark cyan', 'light gray'
-        
-        mono -- a comma-separated string containing monochrome terminal 
-            settings (see "Settings" above.)
+
+        mono -- a comma-separated string containing monochrome terminal
+        settings (see "Settings" above.)
 
             None = no terminal settings (same as 'default')
 
-        foreground_high -- a string containing a comma-separated 
-            foreground color and settings, standard foreground
-            colors (see "Color values" above) or high-colors may 
-            be used
+        foreground_high -- a string containing a comma-separated
+        foreground color and settings, standard foreground
+        colors (see "Color values" above) or high-colors may
+        be used
 
             High-color example values:
             '#009' (0% red, 0% green, 60% red, like HTML colors)
@@ -776,15 +801,15 @@ class BaseScreen(object):
             None = use foreground parameter value
 
         background_high -- a string containing the background color,
-            standard background colors (see "Background colors" above)
-            or high-colors (see "High-color example values" above)
-            may be used
+        standard background colors (see "Background colors" above)
+        or high-colors (see "High-color example values" above)
+        may be used
 
             None = use background parameter value
         """
         basic = AttrSpec(foreground, background, 16)
 
-        if type(mono) == type(()):
+        if type(mono) == tuple:
             # old style of specifying mono attributes was to put them
             # in a tuple.  convert to comma-separated string
             mono = ",".join(mono)
