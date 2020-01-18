@@ -9,7 +9,7 @@
 
 Name:          python-urwid
 Version:       1.1.1
-Release:       1%{?dist}
+Release:       3%{?dist}
 Summary:       Console user interface library
 
 Group:         Development/Libraries
@@ -114,6 +114,12 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 1.1.1-3
+- Mass rebuild 2014-01-24
+
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 1.1.1-2
+- Mass rebuild 2013-12-27
+
 * Wed Nov 21 2012 Fabian Deutsch <fabiand@fedoraproject.org> - 1.1.1 -1
 - Bugfix update
 
